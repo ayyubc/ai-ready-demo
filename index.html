@@ -150,7 +150,8 @@ main:focus{outline:none}
 .node.available:active,.node.rec:active{box-shadow:0 2px 0 var(--mintL)}
 .node.rec{box-shadow:0 6px 0 var(--mintL),0 0 0 8px rgba(69,196,135,.28)}
 .node.passed{background:var(--forest);color:var(--white);box-shadow:0 6px 0 var(--deep)}
-.node.existing{background:var(--teal);color:var(--white);box-shadow:0 6px 0 var(--deep)}
+.node.existing,.node.coursedone,.node.skip{background:var(--teal);color:var(--white);box-shadow:0 6px 0 var(--deep)}
+.node.course{background:var(--white);color:var(--deep);border:3px solid var(--teal);box-shadow:0 6px 0 var(--deep)}
 .node.locked{background:#dbe4d6;color:#5b6a62;box-shadow:0 6px 0 #c3cfbe}
 .node.hrlocked{background:#F6D3CC;color:#7f2a1a;box-shadow:0 6px 0 #dfa89d}
 .node.review{background:var(--coralL);color:var(--white);box-shadow:0 6px 0 #8a2e1e}
@@ -273,7 +274,7 @@ td.num,th.num{text-align:right}
 .scrim{position:fixed;inset:0;background:rgba(21,35,31,.55);z-index:80;display:grid;place-items:center;padding:16px}
 .dialog{background:var(--white);border-radius:28px;padding:24px;max-width:420px;width:100%}
 .dialog .acts{margin-top:16px;justify-content:flex-end}
-.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--white);padding:12px 20px;border-radius:999px;font-weight:600;z-index:90;opacity:0;transition:opacity .25s,transform .25s;max-width:92vw;text-align:center}
+.toast{position:fixed;left:50%;bottom:96px;transform:translateX(-50%) translateY(20px);background:var(--ink);color:var(--white);padding:12px 20px;border-radius:999px;font-weight:600;z-index:90;opacity:0;transition:opacity .25s,transform .25s;max-width:92vw;text-align:center;pointer-events:none}
 .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
 .ring{display:block}
 
@@ -289,10 +290,24 @@ td.num,th.num{text-align:right}
   .tab{flex:1;padding:0 6px}
   .tiles.two{grid-template-columns:1fr}
   .tiles.five{gap:6px}
+  #modTable{min-width:700px}
+  #modTable th:first-child,#modTable td:first-child{min-width:290px}
 }
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation:none!important;transition:none!important}
 }
+
+.persona{background:var(--white);border:1px solid var(--line);border-radius:24px;padding:16px 20px;margin:0 0 16px}
+.persona .chips{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.persona .chip.ai{background:var(--forest);color:var(--olive)}
+.persona .sentence{margin:0}
+.persona.compact{padding:12px 16px;border-radius:20px}
+.persona.compact .chips{margin-bottom:6px}
+.persona.compact .sentence{font-size:.92rem}
+.flagbox{background:#FADBD5;color:#7f2a1a;border-radius:14px;padding:8px 12px;font-weight:600;margin-top:10px}
+.chip.flag{background:#FADBD5;color:#7f2a1a}
+.reason{font-size:.9rem;color:var(--muted);margin:3px 0 0}
+.grp h3{margin-top:0}
 </style>
 </head>
 <body>
@@ -314,12 +329,14 @@ td.num,th.num{text-align:right}
    ===================================================================== */
 const ACAD = 'https://anthropic.skilljar.com/';
 const M365 = 'https://claude.com/claude-for-excel';
-const KEY = 'aiReady.v1';
+const KEY = 'aiReady.v2';
+const OLD_KEY = 'aiReady.v1';
 const DEMO_TODAY = '2026-11-23';
 
 const ENGINEER_COURSES = [
   'Claude Code 101', 'Claude Code in Action', 'Claude Platform 101', 'Building with the Claude API',
-  'Introduction to Model Context Protocol', 'Introduction to subagents', 'Introduction to agent skills'
+  'Introduction to Model Context Protocol', 'Model Context Protocol: Advanced Topics', 'Introduction to subagents',
+  'Introduction to agent skills', 'Claude with Amazon Bedrock', 'Claude on Google Cloud'
 ];
 
 const MODULES = [
@@ -709,35 +726,131 @@ const ROLES = {
   engineer: { label: 'Software engineer', adv: ['M7', 'M8'], role: [], blurb: 'Core modules plus the engineer course track' }
 };
 
-const TASKS = [
-  { v: 'email', l: 'Email' }, { v: 'spreadsheets', l: 'Spreadsheets' }, { v: 'documents', l: 'Documents' }, { v: 'slides', l: 'Slides' },
-  { v: 'meetings', l: 'Meetings' }, { v: 'research', l: 'Research' }, { v: 'customers', l: 'Customer replies' }, { v: 'data', l: 'Data entry' }
-];
-const TASK_BOOST = {
-  email: ['M5'], spreadsheets: ['M2', 'M3'], documents: ['M4'], slides: ['M4'],
-  meetings: ['M13', 'M5'], research: ['M7'], customers: ['M11'], data: ['M3', 'M10']
-};
+/* =====================================================================
+   QUESTION ENGINE (data). One list of definitions; the visible sequence is
+   computed from the answers by visibleQuestions(). To change the intake, edit
+   this list only: key, stage, prompt, type (single | multi | scale), options,
+   max (multi limit), exclusive (value that clears the others) and when(answers).
+   ===================================================================== */
+const ansHas = (a, k, v) => Array.isArray(a[k]) ? a[k].indexOf(v) >= 0 : a[k] === v;
+const isRole = r => a => a.role === r;
+const O = (v, l, s) => ({ v, l, s });
+const SCALE5 = [1, 2, 3, 4, 5].map(n => O(n, String(n)));
 
-const QUESTIONS = [
-  { id: 'role', q: 'Which role are you joining?', type: 'single', opts: [
-    { v: 'finance', l: 'Accounts / finance', s: 'Reconciliations, invoices, month-end' },
-    { v: 'service', l: 'Customer service', s: 'Replies, tickets, policy' },
-    { v: 'admin', l: 'Office admin / EA', s: 'Calendars, meetings, documents' },
-    { v: 'engineer', l: 'Software engineer', s: 'Claude Code, API and agents' }] },
-  { id: 'freq', q: 'How often do you use AI at work today?', type: 'single', opts: [
-    { v: 'never', l: 'Never' }, { v: 'monthly', l: 'A few times a month' }, { v: 'weekly', l: 'Most weeks' }, { v: 'daily', l: 'Every day' }] },
-  { id: 'tools', q: 'Which AI tools have you used?', hint: 'Pick all that apply.', type: 'multi', opts: [
-    { v: 'claude', l: 'Claude' }, { v: 'chatgpt', l: 'ChatGPT' }, { v: 'copilot', l: 'Copilot' }, { v: 'gemini', l: 'Gemini' }, { v: 'none', l: 'None of these' }] },
-  { id: 'excel', q: 'What is your Excel level?', type: 'single', opts: [
-    { v: 'basic', l: 'Basic', s: 'Entering data and simple sums' },
-    { v: 'formulas', l: 'Formulas', s: 'SUM, IF, simple references' },
-    { v: 'pivots', l: 'Pivots and lookups', s: 'Pivot tables, XLOOKUP' },
-    { v: 'models', l: 'Financial models', s: 'Linked, multi-sheet models' }] },
-  { id: 'tasks', q: 'Which three tasks will fill most of your week?', hint: 'Pick exactly three.', type: 'pick3', opts: TASKS },
-  { id: 'aiOffice', q: 'Have you used AI inside Excel, Word or Outlook?', type: 'single', opts: [{ v: 'yes', l: 'Yes' }, { v: 'no', l: 'No' }] },
-  { id: 'confidence', q: 'How confident are you at spotting errors in AI output?', type: 'scale', opts: [1, 2, 3, 4, 5].map(n => ({ v: n, l: String(n) })) },
-  { id: 'built', q: 'Have you built a reusable prompt, template or automation?', type: 'single', opts: [{ v: 'yes', l: 'Yes' }, { v: 'no', l: 'No' }] }
+const QDEFS = [
+  /* ----- Stage 1: everyone ----- */
+  { key: 'role', stage: 1, type: 'single', prompt: 'Which role are you joining?', when: () => true, options: [
+    O('finance', 'Accounts / finance', 'Reconciliations, invoices, month-end'), O('service', 'Customer service', 'Replies, tickets, policy'),
+    O('admin', 'Office admin / EA', 'Calendars, meetings, documents'), O('engineer', 'Software engineer', 'Claude Code, API and agents')] },
+  { key: 'aiFreq', stage: 1, type: 'single', prompt: 'How often do you use AI at work today?', when: () => true, options: [
+    O('never', 'Never'), O('monthly', 'Monthly'), O('weekly', 'Weekly'), O('daily', 'Daily')] },
+  { key: 'tools', stage: 1, type: 'multi', exclusive: 'none', hint: 'Pick all that apply.', prompt: 'Which AI tools have you used?', when: () => true, options: [
+    O('claude', 'Claude'), O('chatgpt', 'ChatGPT'), O('copilot', 'Copilot'), O('gemini', 'Gemini'), O('none', 'None of these')] },
+
+  /* ----- Stage 2: Software engineer ----- */
+  { key: 'workType', stage: 2, type: 'single', prompt: 'What kind of engineering will you mostly do?', when: isRole('engineer'), options: [
+    O('backend', 'Backend'), O('frontend', 'Frontend'), O('data', 'Data and ML'), O('devops', 'Cloud and DevOps'), O('qa', 'QA and test')] },
+  { key: 'lang', stage: 2, type: 'single', prompt: 'What is your main language?', when: isRole('engineer'), options: [
+    O('python', 'Python'), O('js', 'JavaScript or TypeScript'), O('javacs', 'Java or C#'), O('gorust', 'Go or Rust'), O('other', 'Other')] },
+  { key: 'codingAI', stage: 2, type: 'single', prompt: 'How have you used AI for coding?', when: isRole('engineer'), options: [
+    O('none', 'Not yet'), O('autocomplete', 'Autocomplete only'), O('chat', 'Chat for code'), O('agentic', 'Agentic tools such as Claude Code')] },
+  { key: 'apiExp', stage: 2, type: 'single', prompt: 'Have you built on a model API?', when: isRole('engineer'), options: [
+    O('never', 'Never'), O('proto', 'Prototypes'), O('prod', 'In production')] },
+  { key: 'cloud', stage: 2, type: 'single', prompt: 'Where will your work be deployed?', when: isRole('engineer'), options: [
+    O('aws', 'AWS'), O('gcp', 'Google Cloud'), O('azure', 'Azure'), O('onprem', 'On-premises or not sure')] },
+
+  /* ----- Stage 2: Accounts / finance ----- */
+  { key: 'excel', stage: 2, type: 'single', prompt: 'What is your Excel level?', when: isRole('finance'), options: [
+    O('basic', 'Basic', 'Entering data and simple sums'), O('formulas', 'Formulas', 'SUM, IF, simple references'),
+    O('pivots', 'Pivots and lookups', 'Pivot tables, XLOOKUP'), O('models', 'Financial models', 'Linked, multi-sheet models')] },
+  { key: 'finTasks', stage: 2, type: 'multi', max: 3, prompt: 'Which tasks will you own?', when: isRole('finance'), options: [
+    O('recon', 'Reconciliations'), O('invoices', 'Invoices and payables'), O('receivables', 'Receivables and collections'),
+    O('monthend', 'Month-end reporting'), O('budget', 'Budgeting and forecasting'), O('payroll', 'Payroll')] },
+  { key: 'system', stage: 2, type: 'single', prompt: 'Which accounting system will you use?', when: isRole('finance'), options: [
+    O('xero', 'Xero'), O('myob', 'MYOB'), O('netsuite', 'NetSuite'), O('sap', 'SAP'), O('other', 'Other or not sure')] },
+  { key: 'invoiceFormat', stage: 2, type: 'single', prompt: 'How do invoices arrive?', when: isRole('finance'), options: [
+    O('pdf', 'Mostly PDFs'), O('einvoice', 'Mostly e-invoices or system feeds'), O('none', "I won't handle invoices")] },
+  { key: 'audience', stage: 2, type: 'single', prompt: 'Who reads your reports?', when: isRole('finance'), options: [
+    O('manager', 'My manager'), O('team', 'The finance team'), O('exec', 'Executives or the board'), O('client', 'External clients')] },
+
+  /* ----- Stage 2: Customer service ----- */
+  { key: 'channels', stage: 2, type: 'multi', prompt: 'Which channels will you handle?', hint: 'Pick all that apply.', when: isRole('service'), options: [
+    O('email', 'Email'), O('chat', 'Live chat'), O('phone', 'Phone'), O('social', 'Social media')] },
+  { key: 'policy', stage: 2, type: 'single', prompt: 'Does the team have written policies or a knowledge base?', when: isRole('service'), options: [
+    O('yes', 'Yes, well documented'), O('partly', 'Partly'), O('no', 'No or not sure')] },
+  { key: 'ticketSys', stage: 2, type: 'single', prompt: 'Which ticket system will you use?', when: isRole('service'), options: [
+    O('zendesk', 'Zendesk'), O('freshdesk', 'Freshdesk'), O('salesforce', 'Salesforce'), O('other', 'Other or none')] },
+  { key: 'cases', stage: 2, type: 'multi', prompt: 'Which cases will you handle?', hint: 'Pick all that apply.', when: isRole('service'), options: [
+    O('refunds', 'Refunds'), O('complaints', 'Complaints'), O('technical', 'Technical questions'), O('orders', 'Orders and deliveries')] },
+  { key: 'reporting', stage: 2, type: 'single', prompt: 'Will you report on ticket trends?', when: isRole('service'), options: [
+    O('yes', 'Yes'), O('no', 'No')] },
+
+  /* ----- Stage 2: Office admin / EA ----- */
+  { key: 'support', stage: 2, type: 'single', prompt: 'Who will you support?', when: isRole('admin'), options: [
+    O('one', 'One executive'), O('several', 'Several executives'), O('team', 'A whole team or office')] },
+  { key: 'adminTasks', stage: 2, type: 'multi', max: 3, prompt: 'Which tasks will fill your week?', when: isRole('admin'), options: [
+    O('inbox', 'Inbox'), O('calendar', 'Calendar'), O('meetings', 'Meetings and minutes'), O('docs', 'Documents and decks'),
+    O('travel', 'Travel and events'), O('trackers', 'Trackers and expenses')] },
+  { key: 'suite', stage: 2, type: 'single', prompt: 'Which office tools will you use?', when: isRole('admin'), options: [
+    O('m365', 'Microsoft 365'), O('google', 'Google Workspace'), O('both', 'Both')] },
+  { key: 'minutes', stage: 2, type: 'single', prompt: 'How often will you take minutes?', when: isRole('admin'), options: [
+    O('weekly', 'Weekly or more'), O('monthly', 'Monthly'), O('rarely', 'Rarely')] },
+  { key: 'travel', stage: 2, type: 'single', prompt: 'Will you arrange travel or events?', when: isRole('admin'), options: [
+    O('yes', 'Yes'), O('no', 'No')] },
+
+  /* ----- Stage 3: follow-ups, each shown only when its condition holds ----- */
+  { key: 'heldBack', stage: 3, type: 'single', prompt: 'What has held you back from using AI more?',
+    when: a => a.aiFreq === 'never' || a.aiFreq === 'monthly', options: [
+      O('start', 'Not sure where to start'), O('notallowed', 'Not allowed at my last job'), O('trust', "I don't trust the answers"), O('noneed', "Haven't needed it")] },
+  { key: 'confidence', stage: 3, type: 'scale', prompt: 'How confident are you at spotting errors in AI output?',
+    when: a => a.aiFreq === 'weekly' || a.aiFreq === 'daily', options: SCALE5 },
+  { key: 'built', stage: 3, type: 'multi', exclusive: 'none', hint: 'Pick all that apply.', prompt: 'Which of these have you already built?',
+    when: a => a.role === 'engineer' && a.codingAI === 'agentic', options: [
+      O('skills', 'Skills'), O('subagents', 'Subagents'), O('mcp', 'MCP servers'), O('none', 'None of these')] },
+  { key: 'invoiceVolume', stage: 3, type: 'single', prompt: 'Roughly how many invoices a month?',
+    when: a => a.role === 'finance' && ansHas(a, 'finTasks', 'invoices') && a.invoiceFormat === 'pdf', options: [
+      O('low', 'Under 100'), O('mid', '100 to 500'), O('high', 'Over 500')] },
+  { key: 'unclearPolicy', stage: 3, type: 'single', prompt: 'Who decides when policy is unclear?',
+    when: a => a.role === 'service' && (a.policy === 'partly' || a.policy === 'no'), options: [
+      O('leader', 'My team leader'), O('path', 'A written escalation path'), O('self', 'I decide myself')] },
+  { key: 'calendars', stage: 3, type: 'single', prompt: 'How many calendars will you manage?',
+    when: a => a.role === 'admin' && (a.support === 'several' || a.support === 'team'), options: [
+      O('few', '1 to 2'), O('some', '3 to 5'), O('many', 'More than 5')] }
 ];
+const QBY = {}; QDEFS.forEach(q => { QBY[q.key] = q; });
+const STAGE2_COUNT = 5;   // every role has five Stage 2 questions (used for the total before a role is chosen)
+
+function visibleQuestions(a) { a = a || {}; return QDEFS.filter(q => q.when(a)); }
+function optLabel(key, v) {
+  const q = QBY[key]; const o = q && q.options.find(x => String(x.v) === String(v));
+  return o ? o.l : String(v);
+}
+function validAnswer(q, v) {
+  if (v === undefined || v === null || v === '') return false;
+  const known = x => q.options.some(o => String(o.v) === String(x));
+  if (q.type === 'multi') return Array.isArray(v) && v.length >= 1 && v.every(known);
+  return known(v);
+}
+/* Keep only answers to questions that are visible and valid. Conditions only look at earlier questions,
+   so one pass in list order is enough. This is what drops stale answers after a back-and-change. */
+function cleanAnswers(src) {
+  src = (src && typeof src === 'object') ? src : {};
+  const out = {};
+  QDEFS.forEach(q => {
+    if (!q.when(out)) return;
+    let v = src[q.key];
+    if (q.type === 'scale') v = Number(v);
+    if (q.type === 'multi' && Array.isArray(v)) {
+      v = v.filter((x, i) => v.indexOf(x) === i);
+      if (q.exclusive && v.indexOf(q.exclusive) >= 0 && v.length > 1) v = [q.exclusive];
+      if (q.max && v.length > q.max) v = v.slice(0, q.max);
+    }
+    if (validAnswer(q, v)) out[q.key] = v;
+  });
+  return out;
+}
+function intakeComplete(a) { return !!(a && ROLE_KEYS.indexOf(a.role) >= 0) && visibleQuestions(a).every(q => validAnswer(q, a[q.key])); }
+const ROLE_KEYS = ['finance', 'service', 'admin', 'engineer'];
 
 /* Role maps: skill -> modules */
 const ROLE_MAPS = {
@@ -761,31 +874,31 @@ const ROLE_MAPS = {
 /* Fictional sample candidates */
 const SAMPLES = [
   { key: 's1', name: 'Mia Thompson', role: 'finance', start: '2026-12-07',
-    ans: { role: 'finance', freq: 'weekly', tools: ['claude', 'copilot'], excel: 'models', tasks: ['spreadsheets', 'documents', 'data'], aiOffice: 'yes', confidence: 4, built: 'yes' },
+    ans: { role: 'finance', aiFreq: 'weekly', tools: ['claude', 'copilot'], excel: 'models', finTasks: ['monthend', 'budget', 'recon'], system: 'xero', invoiceFormat: 'einvoice', audience: 'exec', confidence: 4 },
     passed: { M1: [91, '2026-11-02'], M2: [94, '2026-11-04'], M3: [88, '2026-11-06'], M4: [82, '2026-11-09'], M5: [79, '2026-11-10'], M6: [85, '2026-11-12'], M7: [90, '2026-11-13'], M8: [87, '2026-11-16'], M9: [92, '2026-11-18'] },
     cred: { id: 'AIR-2026-4M8TQ2', issued: '2026-11-16' } },
   { key: 's2', name: 'Jordan Lee', role: 'service', start: '2026-12-01',
-    ans: { role: 'service', freq: 'monthly', tools: ['chatgpt'], excel: 'formulas', tasks: ['customers', 'email', 'data'], aiOffice: 'no', confidence: 3, built: 'no' },
-    passed: { M1: [76, '2026-11-17'], M2: [72, '2026-11-19'], M3: [81, '2026-11-20'], M4: [74, '2026-11-22'] } },
+    ans: { role: 'service', aiFreq: 'monthly', tools: ['chatgpt'], channels: ['email', 'chat'], policy: 'partly', ticketSys: 'zendesk', cases: ['refunds', 'complaints'], reporting: 'no', heldBack: 'start', unclearPolicy: 'self' },
+    passed: { M1: [76, '2026-11-17'], M5: [72, '2026-11-19'], M6: [81, '2026-11-20'], M4: [74, '2026-11-22'] } },
   { key: 's3', name: 'Sanjana Patel', role: 'admin', start: '2027-01-11',
-    ans: { role: 'admin', freq: 'daily', tools: ['claude', 'chatgpt'], excel: 'pivots', tasks: ['email', 'meetings', 'documents'], aiOffice: 'yes', confidence: 4, built: 'yes' },
-    passed: { M1: [95, '2026-11-09'], M2: [89, '2026-11-11'], M3: [84, '2026-11-13'], M4: [90, '2026-11-16'], M5: [93, '2026-11-18'] } },
+    ans: { role: 'admin', aiFreq: 'daily', tools: ['claude', 'chatgpt'], support: 'several', adminTasks: ['inbox', 'meetings', 'docs'], suite: 'google', minutes: 'weekly', travel: 'no', confidence: 4, calendars: 'some' },
+    passed: { M1: [95, '2026-11-09'], M3: [84, '2026-11-13'], M4: [90, '2026-11-16'], M5: [93, '2026-11-18'] } },
   { key: 's4', name: 'Callum Reid', role: 'engineer', start: '2026-12-14',
-    ans: { role: 'engineer', freq: 'daily', tools: ['claude', 'copilot', 'gemini'], excel: 'formulas', tasks: ['research', 'documents', 'meetings'], aiOffice: 'no', confidence: 5, built: 'yes' },
+    ans: { role: 'engineer', aiFreq: 'daily', tools: ['claude', 'copilot', 'gemini'], workType: 'backend', lang: 'python', codingAI: 'agentic', apiExp: 'prod', cloud: 'aws', confidence: 5, built: ['skills', 'mcp'] },
     passed: { M1: [96, '2026-11-10'], M7: [88, '2026-11-12'], M8: [92, '2026-11-17'] },
     cred: { id: 'AIR-2026-2HC7VN', issued: '2026-11-17' } },
   { key: 's5', name: 'Olivia Zhang', role: 'finance', start: '2026-12-14',
-    ans: { role: 'finance', freq: 'never', tools: ['none'], excel: 'basic', tasks: ['spreadsheets', 'data', 'email'], aiOffice: 'no', confidence: 2, built: 'no' },
-    passed: { M1: [74, '2026-11-12'], M7: [71, '2026-11-14'], M2: [73, '2026-11-18'], M3: [70, '2026-11-20'] }, failed: { M4: 2 } },
+    ans: { role: 'finance', aiFreq: 'never', tools: ['none'], excel: 'basic', finTasks: ['invoices', 'receivables'], system: 'myob', invoiceFormat: 'pdf', audience: 'manager', heldBack: 'start', invoiceVolume: 'mid' },
+    passed: { M1: [74, '2026-11-12'], M2: [73, '2026-11-18'], M3: [70, '2026-11-20'] }, failed: { M4: 2 } },
   { key: 's6', name: 'Marcus Bell', role: 'service', start: '2027-01-18',
-    ans: { role: 'service', freq: 'weekly', tools: ['claude'], excel: 'pivots', tasks: ['customers', 'email', 'research'], aiOffice: 'yes', confidence: 4, built: 'yes' },
+    ans: { role: 'service', aiFreq: 'weekly', tools: ['claude'], channels: ['email', 'chat', 'phone'], policy: 'yes', ticketSys: 'salesforce', cases: ['technical', 'orders'], reporting: 'yes', confidence: 4 },
     passed: { M1: [90, '2026-10-19'], M2: [86, '2026-10-21'], M3: [91, '2026-10-23'], M4: [84, '2026-10-26'], M5: [88, '2026-10-28'], M6: [92, '2026-10-30'], M7: [87, '2026-11-02'], M8: [94, '2026-11-04'], M11: [95, '2026-11-06'], M12: [89, '2026-11-09'], M15: [93, '2026-11-13'] },
     cred: { id: 'AIR-2026-9XK2PD', issued: '2026-11-13' } },
   { key: 's7', name: 'Fatima Haddad', role: 'admin', start: '2026-12-02',
-    ans: { role: 'admin', freq: 'monthly', tools: ['copilot'], excel: 'basic', tasks: ['email', 'meetings', 'data'], aiOffice: 'no', confidence: 3, built: 'no' },
+    ans: { role: 'admin', aiFreq: 'monthly', tools: ['copilot'], support: 'one', adminTasks: ['calendar', 'trackers', 'travel'], suite: 'm365', minutes: 'monthly', travel: 'yes', heldBack: 'trust' },
     passed: { M1: [78, '2026-11-18'], M2: [71, '2026-11-21'] }, tried: { M3: 1 } },
   { key: 's8', name: "Liam O'Connor", role: 'engineer', start: '2027-02-01',
-    ans: { role: 'engineer', freq: 'weekly', tools: ['claude', 'chatgpt'], excel: 'basic', tasks: ['research', 'documents', 'email'], aiOffice: 'no', confidence: 3, built: 'no' },
+    ans: { role: 'engineer', aiFreq: 'weekly', tools: ['claude', 'chatgpt'], workType: 'devops', lang: 'gorust', codingAI: 'chat', apiExp: 'proto', cloud: 'azure', confidence: 3 },
     passed: { M1: [83, '2026-11-20'] } }
 ];
 const LIVE_START = '2026-12-14';
@@ -794,9 +907,9 @@ const LIVE_START = '2026-12-14';
    STATE: persistence with in-memory fallback
    ===================================================================== */
 let memStore = null;
-function storeRead() {
-  try { const v = window.localStorage.getItem(KEY); if (v !== null) return v; } catch (e) { /* storage unavailable */ }
-  return memStore;
+function storeRead(key) {
+  try { const v = window.localStorage.getItem(key); if (v !== null) return v; } catch (e) { /* storage unavailable */ }
+  return key === KEY ? memStore : null;
 }
 function storeWrite(str) {
   memStore = str;
@@ -804,28 +917,44 @@ function storeWrite(str) {
 }
 function storeClear() {
   memStore = null;
-  try { window.localStorage.removeItem(KEY); } catch (e) { /* ignore */ }
+  try { window.localStorage.removeItem(KEY); window.localStorage.removeItem(OLD_KEY); } catch (e) { /* ignore */ }
 }
 function defaultState() {
-  return { v: 1, name: '', intake: { done: false, ans: {} }, prog: {}, xp: 0, days: [], hr: {}, cred: null, roleMaps: {} };
+  return { v: 2, name: '', migrated: false, intake: { done: false, ans: {} }, prog: {}, xp: 0, days: [], hr: {}, cred: null, roleMaps: {} };
+}
+/* State saved by the previous version (key aiReady.v1, 8-question intake) cannot be mapped onto the new
+   questions, so keep only the name and role-map edits and ask the person to answer again. */
+function migrateV1(raw, d) {
+  try {
+    const o = JSON.parse(raw);
+    if (!o || typeof o !== 'object') return d;
+    if (typeof o.name === 'string') d.name = o.name.slice(0, 30);
+    if (o.roleMaps && typeof o.roleMaps === 'object' && !Array.isArray(o.roleMaps)) d.roleMaps = o.roleMaps;
+    d.migrated = !!((o.intake && o.intake.done) || (o.prog && typeof o.prog === 'object' && Object.keys(o.prog).length) || Number(o.xp) > 0);
+  } catch (e) { /* unreadable: start fresh */ }
+  return d;
 }
 function loadState() {
   const d = defaultState();
   try {
-    const raw = storeRead();
-    if (!raw) return d;
+    const raw = storeRead(KEY);
+    if (!raw) { const old = storeRead(OLD_KEY); return old ? migrateV1(old, d) : d; }
     const s = JSON.parse(raw);
-    if (!s || typeof s !== 'object' || s.v !== 1) return d;
+    if (!s || typeof s !== 'object' || s.v !== 2) return d;
+    const ans = cleanAnswers(s.intake && s.intake.ans);
+    const obj = x => (x && typeof x === 'object' && !Array.isArray(x)) ? x : {};
+    const prog = {}; Object.keys(obj(s.prog)).forEach(k => { if (s.prog[k] && typeof s.prog[k] === 'object') prog[k] = s.prog[k]; });
     return {
-      v: 1,
-      name: typeof s.name === 'string' ? s.name : '',
-      intake: { done: !!(s.intake && s.intake.done), ans: (s.intake && typeof s.intake.ans === 'object' && s.intake.ans) || {} },
-      prog: (s.prog && typeof s.prog === 'object') ? s.prog : {},
+      v: 2,
+      name: typeof s.name === 'string' ? s.name.slice(0, 30) : '',
+      migrated: !!s.migrated,
+      intake: { done: !!(s.intake && s.intake.done) && intakeComplete(ans), ans },
+      prog,
       xp: Number(s.xp) || 0,
       days: Array.isArray(s.days) ? s.days.filter(x => typeof x === 'string') : [],
-      hr: (s.hr && typeof s.hr === 'object') ? s.hr : {},
+      hr: obj(s.hr),
       cred: (s.cred && typeof s.cred === 'object' && s.cred.id) ? s.cred : null,
-      roleMaps: (s.roleMaps && typeof s.roleMaps === 'object') ? s.roleMaps : {}
+      roleMaps: obj(s.roleMaps)
     };
   } catch (e) { return d; }
 }
@@ -834,7 +963,7 @@ function save() { try { storeWrite(JSON.stringify(S)); } catch (e) { /* ignore *
 
 /* in-memory UI state (not persisted) */
 const ui = {
-  cand: { screen: null, qi: 0, mod: null, draft: {}, result: null, nameErr: '' },
+  cand: { screen: null, qk: null, mod: null, draft: {}, result: null, nameErr: '' },
   hr: { tab: 'dashboard', cand: null, role: 'finance' },
   menu: false, busy: false, verify: null
 };
@@ -867,111 +996,299 @@ function prog(id) {
   return S.prog[id];
 }
 function hrOv(key) {
-  if (!S.hr[key] || typeof S.hr[key] !== 'object') S.hr[key] = {};
+  if (!S.hr[key] || typeof S.hr[key] !== 'object' || Array.isArray(S.hr[key])) S.hr[key] = {};
   const o = S.hr[key];
   ['add', 'remove', 'lock'].forEach(k => { if (!Array.isArray(o[k])) o[k] = []; });
+  if (!o.group || typeof o.group !== 'object' || Array.isArray(o.group)) o.group = {};
+  Object.keys(o.group).forEach(k => { if (o.group[k] !== 'required' && o.group[k] !== 'optional') delete o.group[k]; });
   return o;
 }
-const NO_OV = { add: [], remove: [], lock: [] };
+const NO_OV = { add: [], remove: [], lock: [], group: {} };
 
 /* =====================================================================
-   PATH LOGIC: intake answers -> ordered units with reasons
+   PATH RULES: buildPath(answers, name) is a pure function. It returns
+     items   the ordered list: { id, kind: 'module' | 'course', unit, group, tags, reason }
+     persona { chips, sentence }
+     flags   notes for the client's HR team
+     notes   notes for the candidate
+   Groups: required | priority | testout | optional.
+   Precedence when several rules hit one module (see resolveGroup): testout beats priority,
+   priority beats an explicit required, an explicit required beats an explicit optional.
+   The base list itself is not a rule, so an explicit "optional" rule can lower a base module.
    ===================================================================== */
-const TASK_LABEL = {}; TASKS.forEach(t => { TASK_LABEL[t.v] = t.l.toLowerCase(); });
+const BASE_LIST = {
+  finance: ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M9', 'M10', 'M15'],
+  service: ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M11', 'M12', 'M15'],
+  admin: ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8', 'M13', 'M14', 'M15'],
+  engineer: ['M1', 'M7', 'M8', 'C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7', 'C8', 'C9', 'C10', 'M15']
+};
+const UNIT_ORDER = ['basics', 'advanced', 'role', 'optional', 'capstone'];
+const UNIT_META = {
+  basics: { title: 'Basics', sub: 'Start here. Everything else unlocks after M1.' },
+  advanced: { title: 'Advanced', sub: 'Tools and habits for everyday work.' },
+  role: { title: 'Your role', sub: '' },
+  optional: { title: 'Optional extras', sub: 'Not required. These never count toward readiness or your credential.' },
+  capstone: { title: 'Capstone', sub: 'Automate a real task from your role map.' }
+};
+function isCourse(id) { return id.charAt(0) === 'C'; }
+function itemName(id) { return isCourse(id) ? id + ' ' + ENGINEER_COURSES[Number(id.slice(1)) - 1] : id + ' (' + MOD[id].title + ')'; }
+function unitFor(id, group) {
+  if (id === 'M1') return 'basics';
+  if (id === 'M15') return 'capstone';
+  if (group === 'optional') return 'optional';
+  if (isCourse(id)) return 'role';
+  return Number(id.slice(1)) <= 8 ? 'advanced' : 'role';
+}
+function resolveGroup(h) {
+  if (!h) return 'required';
+  if (h.test.length) return 'testout';
+  if (h.pri.length) return 'priority';
+  if (h.req.length) return 'required';
+  if (h.opt.length) return 'optional';
+  return 'required';
+}
+/* Order inside a unit: priority (in rule order), then required, then testout. */
+function orderItems(items) {
+  const g = { priority: 0, required: 1, optional: 1, testout: 2 };
+  return items.slice().sort((x, y) => (UNIT_ORDER.indexOf(x.unit) - UNIT_ORDER.indexOf(y.unit)) || (g[x.group] - g[y.group]) || (x.key - y.key));
+}
+const joinList = a => a.length < 2 ? (a[0] || '') : a.slice(0, -1).join(', ') + ' and ' + a[a.length - 1];
 
-function computePath(role, ans, ov) {
-  ov = ov || NO_OV;
-  ans = ans || {};
-  const R = ROLES[role];
-  if (!R) return { units: [], ids: [], tested: [], reasons: [] };
-  const tasks = Array.isArray(ans.tasks) ? ans.tasks : [];
-  const tools = Array.isArray(ans.tools) ? ans.tools : [];
-  const adv = R.adv.slice();
-  const roleMods = R.role.slice();
-  const canonAdv = adv.slice();
-  const canonRole = roleMods.slice();
-  const why = {};
-  const tags = {};
-  const reasons = [];
-  const addTag = (id, t, kind) => { (tags[id] = tags[id] || []).push({ t, kind: kind || '' }); };
-  const front = (list, id, r) => { const i = list.indexOf(id); if (i < 0) return false; list.splice(i, 1); list.unshift(id); why[id] = r; return true; };
+function buildPath(a, name) {
+  a = a || {};
+  const role = a.role;
+  const H = {};            // id -> { pri, req, test, opt: [reasons], tags: [{ t, kind, why }] }
+  const prioRank = {}; let prioN = 0;
+  const slot = id => H[id] || (H[id] = { pri: [], req: [], test: [], opt: [], tags: [] });
+  const hit = (id, kind, why) => { slot(id)[kind].push(why); if (kind === 'pri' && prioRank[id] === undefined) prioRank[id] = prioN++; };
+  const tag = (id, t, kind, why) => { slot(id).tags.push({ t, kind, why: why || '' }); };
+  const Q = (k, v) => '"' + optLabel(k, v) + '"';                   // a quoted answer
+  const QL = (k, vals) => joinList(vals.map(v => Q(k, v)));          // several quoted answers
+  const sel = (k, vals) => vals.filter(v => ansHas(a, k, v));         // which of these were chosen
+  const priority = (id, why) => hit(id, 'pri', why + ', so ' + itemName(id) + ' is a priority.');
+  const testout = (id, why) => hit(id, 'test', why + ', so you can sit the ' + id + ' test first and skip the lessons if you pass.');
+  const optional = (id, why) => hit(id, 'opt', why + ', so ' + itemName(id) + ' is optional.');
+  const required = (id, why) => hit(id, 'req', why + ', so ' + itemName(id) + ' is required.');
+  const flags = []; const notes = [];
 
-  // Q8: reusable prompts
-  if (ans.built === 'no' && adv.includes('M6') && adv.includes('M8')) {
-    adv.splice(adv.indexOf('M8'), 1); adv.splice(adv.indexOf('M6') + 1, 0, 'M8');
-    why.M8 = 'You have not built a reusable prompt or template yet, so Skills (M8) comes straight after multi-step work (M6).';
-  }
-  if (ans.built === 'yes') {
-    front(adv, 'M8', 'You have built reusable prompts or templates before, so Skills (M8) is offered early.');
-    if (adv.includes('M8')) addTag('M8', 'Offered early', 'go');
-  }
-  // Q5: tasks that fill the week move earlier
-  tasks.slice().reverse().forEach(t => {
-    const ids = TASK_BOOST[t] || [];
-    let pick = ids;
-    if (t === 'meetings') pick = [adv.includes('M5') && !roleMods.includes('M13') ? 'M5' : 'M13'];
-    pick.slice().reverse().forEach(id => {
-      const r = 'Your week is heavy on ' + TASK_LABEL[t] + ', so ' + id + ' moves earlier.';
-      front(adv, id, r); front(roleMods, id, r);
-    });
-  });
-  // Q7: low confidence spotting errors
-  if (Number(ans.confidence) <= 2) {
-    front(adv, 'M7', 'You rated your error-spotting at ' + ans.confidence + ' out of 5, so Research and verification (M7) comes straight after M1.');
-  }
-  // tags from other answers
-  if (ans.freq === 'daily') addTag('M1', 'Test out: skip the lessons', 'go');
-  if (tools.includes('none')) addTag('M1', 'Extra practice', 'prio');
-  if (ans.excel === 'basic' && adv.includes('M2')) addTag('M2', 'Excel primer first', 'prio');
-  if (ans.excel === 'models' && adv.includes('M2')) addTag('M2', 'Fast track', 'go');
-  if (ans.aiOffice === 'no') ['M2', 'M3', 'M4', 'M5'].forEach(id => { if (adv.includes(id)) addTag(id, 'Priority', 'prio'); });
+  /* ---------- rules for everyone ---------- */
+  if (a.aiFreq === 'daily') testout('M1', 'You answered ' + Q('aiFreq', 'daily') + ' to how often you use AI at work');
+  if (ansHas(a, 'tools', 'none')) tag('M1', 'Extra practice', 'prio', 'You answered ' + Q('tools', 'none') + ' to the AI tools you have used, so M1 comes with extra practice.');
+  if (a.heldBack === 'start') tag('M1', 'Extra practice', 'prio', 'You said ' + Q('heldBack', 'start') + ' when asked what has held you back, so M1 comes with extra practice.');
+  if (a.heldBack === 'notallowed') tag('M1', 'Policy focus', 'prio', 'You said ' + Q('heldBack', 'notallowed') + ' when asked what has held you back, so M1 puts extra focus on what your employer allows.');
+  if (a.heldBack === 'trust') priority('M7', 'You said ' + Q('heldBack', 'trust') + ' when asked what has held you back');
+  if (a.confidence >= 1 && a.confidence <= 2) priority('M7', 'You rated your error-spotting at "' + a.confidence + '" out of 5');
+  if (a.confidence >= 4 && a.aiFreq === 'daily') testout('M7', 'You rated your error-spotting at "' + a.confidence + '" out of 5 and use AI ' + Q('aiFreq', 'daily'));
 
-  // reasons list
-  if (ans.freq === 'daily') reasons.push('You use AI every day, so M1 offers "Test out: skip the lessons".');
-  if (tools.includes('none')) reasons.push('You have not used an AI tool yet, so M1 is flagged "Extra practice".');
-  if (ans.excel === 'basic' && adv.includes('M2')) reasons.push('Your Excel level is basic, so M2 carries an "Excel primer first" note.');
-  if (ans.excel === 'models' && adv.includes('M2')) reasons.push('You build financial models, so M2 is a "Fast track".');
-  if (ans.aiOffice === 'no') reasons.push('You have not used AI inside Excel, Word or Outlook, so M2 to M5 are tagged "Priority".');
-  if (ans.built === 'yes' && adv.includes('M8')) reasons.push(why.M8);
-  const seen = {};
-  const movedReason = (list, canon) => list.forEach((id, i) => {
-    if (why[id] && canon.indexOf(id) !== i && !seen[id]) { seen[id] = 1; reasons.push(why[id]); }
-  });
-  movedReason(adv, canonAdv); movedReason(roleMods, canonRole);
-  if (ans.built === 'no' && why.M8 && !seen.M8) {
-    const ok = canonAdv.indexOf('M8') !== adv.indexOf('M8');
-    if (ok) reasons.push(why.M8);
+  /* ---------- Accounts / finance ---------- */
+  if (role === 'finance') {
+    if (a.excel === 'basic') {
+      priority('M2', 'You answered ' + Q('excel', 'basic') + ' for your Excel level');
+      priority('M3', 'You answered ' + Q('excel', 'basic') + ' for your Excel level');
+      tag('M2', 'Excel primer first', 'prio', '');
+    }
+    if (a.excel === 'models') testout('M2', 'You answered ' + Q('excel', 'models') + ' for your Excel level');
+    const FIN = { recon: ['M9'], invoices: ['M10'], receivables: ['M5'], monthend: ['M3', 'M4'], budget: ['M3'] };
+    Object.keys(FIN).forEach(t => { if (ansHas(a, 'finTasks', t)) FIN[t].forEach(id => priority(id, 'You will own ' + Q('finTasks', t))); });
+    if (a.invoiceFormat === 'none') optional('M10', 'You answered ' + Q('invoiceFormat', 'none'));
+    if (a.invoiceVolume === 'high') priority('M8', 'You expect ' + Q('invoiceVolume', 'high') + ' invoices a month');
+    if (a.audience === 'exec' || a.audience === 'client') priority('M4', 'Your reports are read by ' + Q('audience', a.audience));
   }
-  const dedup = Array.from(new Set(reasons));
 
-  const mk = id => ({ id, kind: 'module', tags: tags[id] || [] });
-  const units = [
-    { key: 'basics', title: 'Basics', sub: 'Start here. Everything else unlocks after M1.', items: [mk('M1')] },
-    { key: 'advanced', title: 'Advanced', sub: 'Tools and habits for everyday work.', items: adv.map(mk) },
-    { key: 'role', title: 'Your role', sub: role === 'engineer' ? 'Existing engineer courses, already completed.' : 'Skills for ' + R.label.toLowerCase() + '.', items: roleMods.map(mk) },
-    { key: 'capstone', title: 'Capstone', sub: 'Automate a real task from your role map.', items: [mk('M15')] }
-  ];
+  /* ---------- Customer service ---------- */
+  if (role === 'service') {
+    const ch = Array.isArray(a.channels) ? a.channels : [];
+    if (ch.indexOf('email') >= 0) priority('M5', 'You will handle ' + Q('channels', 'email'));
+    else if (ch.length) optional('M5', 'Your channels (' + QL('channels', ch) + ') do not include ' + Q('channels', 'email'));
+    if (a.policy === 'yes') priority('M11', 'You answered ' + Q('policy', 'yes') + ' about written policies');
+    if (a.policy === 'partly' || a.policy === 'no') {
+      tag('M11', 'Needs client policy pack', 'prio', 'You answered ' + Q('policy', a.policy) + ' about written policies, so M11 needs the client\'s policy pack before you start.');
+      priority('M6', 'You answered ' + Q('policy', a.policy) + ' about written policies');
+      flags.push('No complete written policy: client to supply before M11');
+    }
+    const refComp = sel('cases', ['refunds', 'complaints']);
+    if (refComp.length) priority('M11', 'You will handle ' + QL('cases', refComp));
+    if (ansHas(a, 'cases', 'orders')) priority('M7', 'You will handle ' + Q('cases', 'orders'));
+    if (ansHas(a, 'cases', 'technical')) priority('M6', 'You will handle ' + Q('cases', 'technical'));
+    if (a.reporting === 'yes') { priority('M12', 'You answered ' + Q('reporting', 'yes') + ' to reporting on ticket trends'); priority('M3', 'You answered ' + Q('reporting', 'yes') + ' to reporting on ticket trends'); }
+    if (a.reporting === 'no') ['M2', 'M3', 'M12'].forEach(id => optional(id, 'You answered ' + Q('reporting', 'no') + ' to reporting on ticket trends'));
+    if (a.unclearPolicy === 'self') tag('M1', 'Escalation focus', 'prio', 'You answered ' + Q('unclearPolicy', 'self') + ' to who decides when policy is unclear, so M1 adds a focus on when to escalate.');
+  }
+
+  /* ---------- Office admin / EA ---------- */
+  if (role === 'admin') {
+    const tasks = Array.isArray(a.adminTasks) ? a.adminTasks : [];
+    const ib = sel('adminTasks', ['inbox', 'calendar']);
+    if (ib.length) priority('M5', 'You chose ' + QL('adminTasks', ib) + ' as a task for your week');
+    if (tasks.indexOf('meetings') >= 0) priority('M13', 'You chose ' + Q('adminTasks', 'meetings') + ' as a task for your week');
+    if (tasks.indexOf('docs') >= 0) priority('M4', 'You chose ' + Q('adminTasks', 'docs') + ' as a task for your week');
+    if (tasks.indexOf('travel') >= 0) priority('M14', 'You chose ' + Q('adminTasks', 'travel') + ' as a task for your week');
+    if (tasks.indexOf('trackers') >= 0) {
+      priority('M14', 'You chose ' + Q('adminTasks', 'trackers') + ' as a task for your week');
+      priority('M3', 'You chose ' + Q('adminTasks', 'trackers') + ' as a task for your week');
+      hit('M9', 'opt', 'You chose ' + Q('adminTasks', 'trackers') + ' as a task for your week, so M9 (' + MOD.M9.title + ') is offered as an optional extra for expense reconciliation.');
+    } else if (tasks.length) optional('M2', 'Your tasks (' + QL('adminTasks', tasks) + ') do not include ' + Q('adminTasks', 'trackers'));
+    if (a.minutes === 'weekly') priority('M13', 'You take minutes ' + Q('minutes', 'weekly'));
+    else if (a.minutes === 'rarely' && tasks.length && tasks.indexOf('meetings') < 0) optional('M13', 'You take minutes ' + Q('minutes', 'rarely') + ' and your tasks do not include ' + Q('adminTasks', 'meetings'));
+    if (a.travel === 'no' && tasks.length && tasks.indexOf('travel') < 0 && tasks.indexOf('trackers') < 0) optional('M14', 'You answered ' + Q('travel', 'no') + ' to arranging travel or events and your tasks include neither ' + Q('adminTasks', 'travel') + ' nor ' + Q('adminTasks', 'trackers'));
+    if (a.support === 'several' || a.support === 'team') priority('M5', 'You will support ' + Q('support', a.support));
+    if (a.calendars === 'many') priority('M8', 'You will manage ' + Q('calendars', 'many') + ' calendars');
+    if (a.suite === 'google') ['M2', 'M3', 'M4', 'M5'].forEach(id => tag(id, 'Microsoft examples; same method in Google', 'go', 'You use ' + Q('suite', 'google') + ', so the examples in ' + id + ' are Microsoft ones and the method is the same in Google.'));
+  }
+
+  /* ---------- Software engineer ---------- */
   if (role === 'engineer') {
-    units[2].items = ENGINEER_COURSES.map((c, i) => ({ id: 'C' + (i + 1), kind: 'existing', title: c, tags: [] }));
+    const coding = Q('codingAI', a.codingAI || 'none');
+    const built = Array.isArray(a.built) ? a.built : [];
+    const builtTxt = built.length && built.indexOf('none') < 0 ? QL('built', built) : Q('built', 'none');
+    if (a.codingAI === 'none' || a.codingAI === 'autocomplete' || a.codingAI === 'chat') {
+      required('C1', 'You answered ' + coding + ' to how you have used AI for coding');
+      required('C2', 'You answered ' + coding + ' to how you have used AI for coding');
+      required('C5', 'You answered ' + coding + ' to how you have used AI for coding');
+      required('C8', 'You answered ' + coding + ' to how you have used AI for coding');
+      optional('C7', 'You answered ' + coding + ' to how you have used AI for coding');
+      optional('C6', 'You answered ' + coding + ' to how you have used AI for coding');
+    }
+    if (a.codingAI === 'agentic') {
+      hit('C1', 'test', 'You answered ' + coding + ', so you can skip ' + itemName('C1') + ' as already experienced.');
+      priority('C2', 'You answered ' + coding);
+      const has = v => built.indexOf(v) >= 0;
+      if (has('skills')) { hit('C8', 'test', 'You have built ' + Q('built', 'skills') + ', so you can skip ' + itemName('C8') + ' as already experienced.'); hit('M8', 'test', 'You have built ' + Q('built', 'skills') + ', so you can sit the M8 test first and skip the lessons if you pass.'); }
+      else required('C8', 'You answered ' + builtTxt + ' to what you have built, which does not include ' + Q('built', 'skills'));
+      if (has('subagents')) hit('C7', 'test', 'You have built ' + Q('built', 'subagents') + ', so you can skip ' + itemName('C7') + ' as already experienced.');
+      else required('C7', 'You answered ' + builtTxt + ' to what you have built, which does not include ' + Q('built', 'subagents'));
+      if (has('mcp')) { hit('C5', 'test', 'You have built ' + Q('built', 'mcp') + ', so you can skip ' + itemName('C5') + ' as already experienced.'); priority('C6', 'You have built ' + Q('built', 'mcp') + ' and can go further'); }
+      else { required('C5', 'You answered ' + builtTxt + ' to what you have built, which does not include ' + Q('built', 'mcp')); optional('C6', 'You answered ' + builtTxt + ' to what you have built, which does not include ' + Q('built', 'mcp')); }
+    }
+    if (a.apiExp === 'never') { priority('C3', 'You answered ' + Q('apiExp', 'never') + ' to building on a model API'); required('C4', 'You answered ' + Q('apiExp', 'never') + ' to building on a model API'); }
+    if (a.apiExp === 'proto') { optional('C3', 'You answered ' + Q('apiExp', 'proto') + ' to building on a model API'); priority('C4', 'You answered ' + Q('apiExp', 'proto') + ' to building on a model API'); }
+    if (a.apiExp === 'prod') { optional('C3', 'You answered ' + Q('apiExp', 'prod') + ' to building on a model API'); hit('C4', 'test', 'You answered ' + Q('apiExp', 'prod') + ' to building on a model API, so you can skip ' + itemName('C4') + ' as already experienced.'); }
+    const cloudCourse = a.cloud === 'aws' ? 'C9' : a.cloud === 'gcp' ? 'C10' : '';
+    if (cloudCourse) required(cloudCourse, 'You will deploy on ' + Q('cloud', a.cloud));
+    else if (a.cloud) notes.push('No cloud-specific course for your platform yet (you answered ' + Q('cloud', a.cloud) + ').');
+    if (a.workType === 'backend') priority('C5', 'You will mostly do ' + Q('workType', 'backend') + ' work');
+    if (a.workType === 'data') priority('C4', 'You will mostly do ' + Q('workType', 'data') + ' work');
+    if (a.workType === 'devops' && cloudCourse) priority(cloudCourse, 'You will mostly do ' + Q('workType', 'devops') + ' work');
+    if (a.workType === 'qa') { priority('C2', 'You will mostly do ' + Q('workType', 'qa') + ' work'); priority('M7', 'You will mostly do ' + Q('workType', 'qa') + ' work'); }
   }
-  // HR overrides
-  const remove = ov.remove || [];
-  units.forEach(u => { u.items = u.items.filter(it => it.kind === 'existing' || !remove.includes(it.id) || it.id === 'M1' || it.id === 'M15'); });
-  const have = new Set(); units.forEach(u => u.items.forEach(it => have.add(it.id)));
-  (ov.add || []).slice().sort((a, b) => Number(a.slice(1)) - Number(b.slice(1))).forEach(id => {
+
+  /* ---------- assemble the items ---------- */
+  const base = BASE_LIST[role] || [];
+  const items = [];
+  const make = (id, ord) => {
+    const h = H[id]; const group = resolveGroup(h);
+    const first = (h && h[{ testout: 'test', priority: 'pri', required: 'req', optional: 'opt' }[group]][0]) || '';
+    const why = [first].concat(h ? h.tags.map(t => t.why) : []).filter((x, i, arr) => x && arr.indexOf(x) === i);
+    return { id, kind: isCourse(id) ? 'course' : 'module', unit: unitFor(id, group), group, key: group === 'priority' && prioRank[id] !== undefined ? prioRank[id] : ord,
+      tags: h ? h.tags.map(t => ({ t: t.t, kind: t.kind })).filter((t, i, arr) => arr.findIndex(u => u.t === t.t) === i) : [], reason: why.join(' ') };
+  };
+  base.forEach((id, i) => {
+    const h = H[id];
+    if ((id === 'C9' || id === 'C10') && !(h && (h.req.length || h.pri.length))) return;   // only the matching cloud course is listed
+    items.push(make(id, i));
+  });
+  Object.keys(H).forEach(id => { if (base.indexOf(id) < 0 && MOD[id] && H[id].opt.length) items.push(make(id, 100 + Number(id.slice(1)))); });   // optional modules added by a rule
+
+  return { role, items: orderItems(items), persona: buildPersona(a, name), flags, notes };
+}
+
+/* ---------- persona: chips and one sentence built from the answers ---------- */
+function buildPersona(a, name) {
+  const who = name || 'This hire';
+  const lc = (k, v) => optLabel(k, v).toLowerCase();
+  const L = (k, v) => optLabel(k, v);
+  const arr = k => Array.isArray(a[k]) ? a[k] : [];
+  const ai = a.aiFreq === 'daily' ? ['Daily AI user', 'a daily AI user'] : a.aiFreq === 'weekly' ? ['Regular AI user', 'a regular AI user'] : a.aiFreq ? ['New to AI', 'new to AI'] : null;
+  const chips = []; const roleChips = [];
+  if (ai) chips.push(ai[0]);
+  const parts = [];            // "who ..." clauses
+  if (ai) parts.push('is ' + ai[1]);
+  let head = '', tail = '';
+  if (a.role === 'finance') {
+    const ex = { basic: 'with basic Excel', formulas: 'with working Excel formulas', pivots: 'with pivots and lookups in Excel', models: 'with strong Excel' }[a.excel];
+    head = 'a finance hire' + (ex ? ' ' + ex : '');
+    if (a.excel) roleChips.push('Excel: ' + L('excel', a.excel));
+    const FT = { recon: 'reconciliations', invoices: 'invoices', receivables: 'receivables', monthend: 'month-end reporting', budget: 'budgeting', payroll: 'payroll' };
+    const tasks = arr('finTasks');
+    tasks.slice(0, 2).forEach(t => roleChips.push(L('finTasks', t)));
+    const sys = a.system && a.system !== 'other' ? L('system', a.system) : '';
+    if (sys) roleChips.push(sys);
+    if (tasks.length) parts.push('will own ' + joinList(tasks.map(t => FT[t])) + (sys ? ' in ' + sys : ''));
+    else if (sys) parts.push('will use ' + sys);
+  } else if (a.role === 'service') {
+    head = 'a customer service hire';
+    const ch = arr('channels');
+    if (ch.length) { roleChips.push('Channels: ' + ch.map(v => L('channels', v)).join(', ')); parts.push('will handle ' + joinList(ch.map(v => lc('channels', v)))); }
+    const pol = { yes: ['Policies documented', 'with well-documented policies'], partly: ['Policies partly documented', 'with only partly documented policies'], no: ['No written policy', 'with no complete written policy'] }[a.policy];
+    if (pol) { roleChips.push(pol[0]); tail = ', ' + pol[1]; }
+    if (a.reporting === 'yes') { roleChips.push('Reports on trends'); parts.push('will report on ticket trends'); }
+  } else if (a.role === 'admin') {
+    head = 'an office admin hire';
+    const sup = { one: ['Supports one executive', 'one executive'], several: ['Supports several executives', 'several executives'], team: ['Supports a whole team', 'a whole team or office'] }[a.support];
+    if (sup) { roleChips.push(sup[0]); parts.push('will support ' + sup[1]); }
+    const tasks = arr('adminTasks');
+    tasks.slice(0, 2).forEach(t => roleChips.push(L('adminTasks', t)));
+    const AT = { inbox: 'inbox', calendar: 'calendar', meetings: 'meetings', docs: 'documents', travel: 'travel', trackers: 'trackers' };
+    if (tasks.length) tail = ', mostly on ' + joinList(tasks.slice(0, 2).map(t => AT[t]));
+    const suite = { m365: 'Microsoft 365', google: 'Google Workspace', both: 'Microsoft 365 and Google Workspace' }[a.suite];
+    if (suite) { roleChips.push(suite); tail += ', working in ' + suite; }
+  } else if (a.role === 'engineer') {
+    const wt = { backend: 'a backend engineer', frontend: 'a frontend engineer', data: 'a data and ML engineer', devops: 'a cloud and DevOps engineer', qa: 'a QA and test engineer' }[a.workType];
+    head = wt || 'a software engineer';
+    if (a.workType) roleChips.push(L('workType', a.workType));
+    if (a.lang) { roleChips.push(L('lang', a.lang)); head += a.lang === 'other' ? ' working mainly in another language' : ' working mainly in ' + L('lang', a.lang); }
+    if (a.codingAI) { roleChips.push(a.codingAI === 'agentic' ? 'Agentic tools' : 'New to AI coding'); parts.push(a.codingAI === 'agentic' ? 'already uses agentic coding tools' : 'is new to agentic coding tools'); }
+    const cl = { aws: ['AWS', 'will deploy to AWS'], gcp: ['Google Cloud', 'will deploy to Google Cloud'], azure: ['Azure', 'will deploy to Azure'], onprem: ['On-premises', 'will deploy on-premises or is not sure where yet'] }[a.cloud];
+    if (cl) { roleChips.push(cl[0]); parts.push(cl[1]); }
+  }
+  const sentence = who + ' is ' + (head || 'a new hire') + (parts.length ? ' who ' + joinList(parts) : '') + tail + '.';
+  return { chips: chips.concat(roleChips.slice(0, 4)), sentence };
+}
+
+/* ---------- adapter: buildPath + HR overrides -> units for the screens ---------- */
+const EMPTY_PATH = { units: [], items: [], ids: [], tested: [], counted: [], persona: null, flags: [], notes: [] };
+const GROUP_TAG = { priority: { t: 'Priority', kind: 'prio' }, testout: { t: 'Test out', kind: 'go' }, optional: { t: 'Optional', kind: '' } };
+function computePath(role, ans, ov, name) {
+  ov = ov || NO_OV;
+  if (!ROLES[role]) return EMPTY_PATH;
+  const bp = buildPath(Object.assign({}, ans, { role }), name);
+  let items = bp.items.map(it => Object.assign({}, it, { tags: it.tags.slice() }));
+  const keep = id => id === 'M1' || id === 'M15' || isCourse(id) || (ov.remove || []).indexOf(id) < 0;
+  items = items.filter(it => keep(it.id));
+  const og = ov.group || {};
+  items.forEach(it => {
+    const g = og[it.id];
+    if (!g || it.id === 'M1' || it.id === 'M15') return;
+    if (g === 'optional' && it.group !== 'optional') { it.group = 'optional'; it.reason = 'Your HR team made this optional.'; it.tags = [{ t: 'Set by HR', kind: 'hr' }]; }
+    else if (g === 'required' && it.group === 'optional') { it.group = 'required'; it.reason = 'Your HR team made this required.'; it.tags = [{ t: 'Set by HR', kind: 'hr' }]; }
+    it.unit = unitFor(it.id, it.group);
+  });
+  const have = new Set(items.map(it => it.id));
+  (ov.add || []).forEach(id => {
     if (MOD[id] && !have.has(id) && id !== 'M1' && id !== 'M15') {
-      units[2].items.push({ id, kind: 'module', tags: [{ t: 'Assigned by HR', kind: 'hr' }] });
+      items.push({ id, kind: 'module', unit: unitFor(id, 'required'), group: 'required', key: 200 + Number(id.slice(1)), tags: [{ t: 'Assigned by HR', kind: 'hr' }], reason: 'Assigned by your HR team.' });
       have.add(id);
     }
   });
-  const ids = []; units.forEach(u => u.items.forEach(it => ids.push(it.id)));
+  items.forEach(it => {
+    const gt = GROUP_TAG[it.group];
+    if (gt) it.tags = [it.kind === 'course' && it.group === 'testout' ? { t: 'Skip, already experienced', kind: 'go' } : gt].concat(it.tags);
+  });
+  items = orderItems(items);
+  const units = UNIT_ORDER.map(k => ({
+    key: k, title: UNIT_META[k].title, items: items.filter(it => it.unit === k),
+    sub: k === 'role' ? (role === 'engineer' ? 'Courses matched to your answers.' : 'Skills for ' + ROLES[role].label.toLowerCase() + '.') : UNIT_META[k].sub
+  }));
+  const ids = items.map(it => it.id);
   const tested = ids.filter(id => MOD[id]);
-  return { units, ids, tested, reasons: dedup };
+  const counted = items.filter(it => it.kind === 'module' && it.group !== 'optional').map(it => it.id);
+  return { units, items, ids, tested, counted, persona: bp.persona, flags: bp.flags, notes: bp.notes };
 }
 
 /* A candidate context: live or sample */
+function firstName(n) { return String(n || '').trim().split(/\s+/)[0]; }
 function liveCand() {
-  return { key: 'live', live: true, name: S.name || 'You (live demo)', role: S.intake.done ? S.intake.ans.role : null,
+  return { key: 'live', live: true, name: S.name || 'You (live demo)', first: S.name || '', role: S.intake.done ? S.intake.ans.role : null,
     start: LIVE_START, ans: S.intake.ans, prog: S.prog, ov: hrOv('live') };
 }
 function sampleProg(def) {
@@ -983,31 +1300,37 @@ function sampleProg(def) {
 }
 const SAMPLE_PROG = {}; SAMPLES.forEach(s => { SAMPLE_PROG[s.key] = sampleProg(s); });
 function allCands() {
-  const list = SAMPLES.map(s => ({ key: s.key, live: false, name: s.name, role: s.role, start: s.start, ans: s.ans, prog: SAMPLE_PROG[s.key], ov: hrOv(s.key), cred: s.cred }));
+  const list = SAMPLES.map(s => ({ key: s.key, live: false, name: s.name, first: firstName(s.name), role: s.role, start: s.start, ans: s.ans, prog: SAMPLE_PROG[s.key], ov: hrOv(s.key), cred: s.cred }));
   list.push(liveCand());
   return list;
 }
 function candByKey(k) { return allCands().find(c => c.key === k) || null; }
 
-function candPath(c) { return c.role ? computePath(c.role, c.ans, c.ov) : { units: [], ids: [], tested: [], reasons: [] }; }
-function basePathIds(c) { return c.role ? computePath(c.role, c.ans, NO_OV).ids : []; }
+function candPath(c) { return c.role ? computePath(c.role, c.ans, c.ov, c.first) : EMPTY_PATH; }
+function basePathIds(c) { return c.role ? computePath(c.role, c.ans, NO_OV, c.first).ids : []; }
+function baseGroup(c, id) { const it = c.role ? computePath(c.role, c.ans, NO_OV, c.first).items.find(x => x.id === id) : null; return it ? it.group : null; }
 
 function nodeState(it, c, path) {
-  if (it.kind === 'existing') return 'existing';
-  const id = it.id; const p = c.prog[id] || {};
+  const id = it.id;
+  if (it.kind === 'course') {
+    if (it.group === 'testout') return 'skip';
+    return (c.prog[id] && c.prog[id].studied) ? 'coursedone' : 'course';
+  }
+  const p = c.prog[id] || {};
   if (p.passed) return 'passed';
   if (c.ov.lock.includes(id)) return 'hrlocked';
   if ((p.attempts || 0) >= 2) return 'review';
   if (id !== 'M1' && !(c.prog.M1 && c.prog.M1.passed)) return 'locked';
   if (id === 'M15') {
-    const others = path.tested.filter(x => x !== 'M15');
+    const others = path.counted.filter(x => x !== 'M15');
     if (!others.every(x => c.prog[x] && c.prog[x].passed)) return 'locked';
   }
   return 'available';
 }
+/* Readiness and the credential count required, priority and testout modules only (path.counted). */
 function metrics(c) {
   const path = candPath(c);
-  const tested = path.tested;
+  const tested = path.counted;
   const passed = tested.filter(id => c.prog[id] && c.prog[id].passed);
   const readiness = tested.length ? Math.round(passed.length / tested.length * 100) : 0;
   const foundation = tested.filter(id => Number(id.slice(1)) <= 8);
@@ -1023,7 +1346,7 @@ function metrics(c) {
 }
 function recommended(c, path) {
   for (const u of path.units) for (const it of u.items) {
-    if (it.kind !== 'module') continue;
+    if (it.kind !== 'module' || it.group === 'optional') continue;
     if (nodeState(it, c, path) === 'available') return it.id;
   }
   return null;
@@ -1290,7 +1613,7 @@ function renderNav() {
   const tabs = [['candidate', 'Candidate'], ['hr', 'HR team'], ['credential', 'Credential']];
   document.getElementById('tabs').innerHTML = tabs.map(t => '<a class="tab" href="#' + t[0] + '"' + (t[0] === r ? ' aria-current="page"' : '') + '>' + t[1] + '</a>').join('');
   document.getElementById('menuwrap').innerHTML = '<button type="button" class="tab" data-act="menu" aria-haspopup="true" aria-expanded="' + ui.menu + '" id="menuBtn">Demo tools</button>' +
-    (ui.menu ? '<div class="menu" role="menu"><small>Presenter shortcuts</small><button type="button" role="menuitem" data-act="pass-all">Pass all modules</button><button type="button" role="menuitem" data-act="reset-ask">Reset demo</button></div>' : '');
+    (ui.menu ? '<div class="menu" role="menu"><small>Presenter shortcuts</small><button type="button" role="menuitem" data-act="pass-all">Pass all modules</button><button type="button" role="menuitem" data-act="retake-ask">Retake intake</button><button type="button" role="menuitem" data-act="reset-ask">Reset demo</button></div>' : '');
 }
 function render(opts) {
   opts = opts || {};
@@ -1334,7 +1657,8 @@ function candView() {
 function welcomeView() {
   return '<section class="col welcome" aria-labelledby="h">' + sprout('happy', 128) +
     '<h1 id="h">Be ready for AI before day one</h1>' +
-    '<p class="lede">Eight short questions shape a path of practical modules for your role. Pass the tests, earn a credential your new team can verify.</p>' +
+    '<p class="lede">A few short questions, matched to your role, shape a path of practical modules. Pass the tests, earn a credential your new team can verify.</p>' +
+    (S.migrated ? '<div class="card soft" id="migrated" role="status"><strong>We have updated the questions.</strong> Your earlier answers could not be carried over, so please answer them again. Your name is kept.</div>' : '') +
     '<form id="nameForm" class="card" novalidate><div class="field"><label for="firstName">Your first name</label>' +
     '<input id="firstName" class="input" type="text" autocomplete="given-name" maxlength="30" value="' + esc(S.name) + '" aria-describedby="nameErr"></div>' +
     '<p id="nameErr" class="err" role="alert">' + esc(ui.cand.nameErr) + '</p>' +
@@ -1343,53 +1667,72 @@ function welcomeView() {
     (S.intake.done ? '<button type="button" class="linkbtn" data-act="home">Back to my path</button>' : '') + '</section>';
 }
 
-function qValid(q, ans) {
-  const v = ans[q.id];
-  if (q.type === 'multi') return Array.isArray(v) && v.length >= 1;
-  if (q.type === 'pick3') return Array.isArray(v) && v.length === 3;
-  return v !== undefined && v !== null && v !== '';
+function qValid(q, ans) { return validAnswer(q, ans[q.key]); }
+/* The questions this person will actually see, and the total shown before a role is chosen (everyone gets 5 role questions). */
+function currentQuestion() {
+  const seq = visibleQuestions(S.intake.ans);
+  let q = QBY[ui.cand.qk];
+  if (!q || seq.indexOf(q) < 0) q = seq[0];
+  ui.cand.qk = q.key;
+  return { q, seq, idx: seq.indexOf(q), total: seq.length + (S.intake.ans.role ? 0 : STAGE2_COUNT) };
 }
 function intakeView() {
-  const qi = ui.cand.qi; const q = QUESTIONS[qi]; const ans = S.intake.ans;
-  const cur = ans[q.id];
-  let tiles = '';
+  const cq = currentQuestion(); const q = cq.q; const ans = S.intake.ans; const cur = ans[q.key];
   const isSel = v => Array.isArray(cur) ? cur.indexOf(v) >= 0 : String(cur) === String(v);
+  const atMax = q.max && Array.isArray(cur) && cur.length >= q.max;
+  const hint = q.max ? 'Pick up to ' + ({ 3: 'three' }[q.max] || q.max) + '. (' + (Array.isArray(cur) ? cur.length : 0) + ' of ' + q.max + ' chosen)' : (q.hint || '');
+  let tiles;
   if (q.type === 'scale') {
-    tiles = '<div class="tiles five" role="group" aria-label="' + esc(q.q) + '">' + q.opts.map(o => '<button type="button" class="tile num" data-act="pick" data-v="' + o.v + '" aria-pressed="' + isSel(o.v) + '">' + o.l + '</button>').join('') + '</div><div class="scale"><span>Not confident</span><span>Very confident</span></div>';
+    tiles = '<div class="tiles five" role="group" aria-label="' + esc(q.prompt) + '">' + q.options.map(o => '<button type="button" class="tile num" data-act="pick" data-v="' + o.v + '" aria-pressed="' + isSel(o.v) + '">' + o.l + '</button>').join('') + '</div><div class="scale"><span>Not confident</span><span>Very confident</span></div>';
   } else {
-    const two = q.opts.length === 2;
-    tiles = '<div class="tiles' + (two ? ' two' : '') + '" role="group" aria-label="' + esc(q.q) + '">' + q.opts.map(o => {
-      const dis = q.type === 'pick3' && Array.isArray(cur) && cur.length >= 3 && cur.indexOf(o.v) < 0;
+    tiles = '<div class="tiles' + (q.options.length === 2 ? ' two' : '') + '" role="group" aria-label="' + esc(q.prompt) + '">' + q.options.map(o => {
+      const dis = atMax && !isSel(o.v);
       return '<button type="button" class="tile" data-act="pick" data-v="' + esc(o.v) + '" aria-pressed="' + isSel(o.v) + '"' + (dis ? ' aria-disabled="true"' : '') + '>' + esc(o.l) + (o.s ? '<small>' + esc(o.s) + '</small>' : '') + '</button>';
     }).join('') + '</div>';
   }
-  const last = qi === QUESTIONS.length - 1;
-  return '<section class="col" aria-labelledby="qh"><div class="row between"><button type="button" class="back" data-act="q-back">' + ico('back', 18) + ' Back</button><span class="muted small">Question ' + (qi + 1) + ' of ' + QUESTIONS.length + '</span></div>' +
-    '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="' + QUESTIONS.length + '" aria-valuenow="' + qi + '"><i data-w="' + Math.round(qi / QUESTIONS.length * 100 + 4) + '"></i></div>' +
-    '<h2 id="qh">' + esc(q.q) + '</h2>' + (q.hint ? '<p class="muted">' + esc(q.hint) + (q.type === 'pick3' ? ' (' + (Array.isArray(cur) ? cur.length : 0) + ' of 3 chosen)' : '') + '</p>' : '') +
+  const last = cq.idx === cq.seq.length - 1;
+  return '<section class="col" aria-labelledby="qh" data-q="' + q.key + '"><div class="row between"><button type="button" class="back" data-act="q-back">' + ico('back', 18) + ' Back</button><span class="muted small" id="qCount">Question ' + (cq.idx + 1) + ' of ' + cq.total + '</span></div>' +
+    '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="' + cq.total + '" aria-valuenow="' + cq.idx + '"><i data-w="' + Math.round(cq.idx / cq.total * 100 + 4) + '"></i></div>' +
+    '<h2 id="qh">' + esc(q.prompt) + '</h2>' + (hint ? '<p class="muted" id="qHint">' + esc(hint) + '</p>' : '') +
     tiles + '<button type="button" class="btn block" data-act="q-next"' + (qValid(q, ans) ? '' : ' disabled') + '>' + (last ? 'See my path' : 'Continue') + '</button></section>';
 }
 
+function personaCard(path, compact, extra) {
+  const p = path.persona; if (!p) return '';
+  return '<div class="persona' + (compact ? ' compact' : '') + '" id="personaCard"><div class="chips" aria-label="Persona">' + p.chips.map((t, i) => '<span class="chip' + (i === 0 ? ' ai' : '') + '">' + esc(t) + '</span>').join('') + '</div><p class="sentence">' + esc(p.sentence) + '</p>' + (extra || '') + '</div>';
+}
+const GROUPS = [
+  ['priority', 'Priority', 'Start with these. They matter most for your answers.'],
+  ['required', 'Required', 'Needed for your readiness and credential.'],
+  ['testout', 'Test out', 'Sit the test first. If you pass, you can skip the lessons.'],
+  ['optional', 'Optional extras', 'Not required. These never count toward readiness or your credential.']
+];
 function summaryView() {
   const c = liveCand(); const path = candPath(c);
-  const rows = [];
-  path.units.forEach(u => u.items.forEach(it => rows.push(it)));
-  const items = rows.map((it, i) => {
-    const isEx = it.kind === 'existing';
-    const title = isEx ? it.title : it.id + '  ' + MOD[it.id].title;
-    return '<li><span class="n' + (isEx ? ' ex' : '') + '">' + (i + 1) + '</span><div><strong>' + esc(title) + '</strong>' + (isEx ? ' <span class="tag go">Existing course</span>' : '') + '<div>' + tagsHTML(it.tags, 3) + '</div></div></li>';
+  const pos = {}; path.items.forEach((it, i) => { pos[it.id] = i + 1; });
+  const cards = GROUPS.map(g => {
+    const list = path.items.filter(it => it.group === g[0]);
+    const rows = list.map(it => {
+      const title = it.kind === 'course' ? it.id + '  ' + ENGINEER_COURSES[Number(it.id.slice(1)) - 1] : it.id + '  ' + MOD[it.id].title;
+      return '<li data-id="' + it.id + '"><span class="n' + (it.kind === 'course' ? ' ex' : '') + '">' + pos[it.id] + '</span><div><strong>' + esc(title) + '</strong>' + (it.kind === 'course' ? ' <span class="tag go">Course</span>' : '') +
+        '<div>' + tagsHTML(it.tags, 4) + '</div>' + (it.reason ? '<p class="reason">' + esc(it.reason) + '</p>' : '') + '</div></li>';
+    }).join('');
+    return '<div class="card grp" id="grp-' + g[0] + '"><h3>' + g[1] + ' <span class="muted small">(' + list.length + ')</span></h3><p class="muted small">' + g[2] + '</p>' +
+      (list.length ? '<ol class="order">' + rows + '</ol>' : '<p class="muted small m0">Nothing here for your answers.</p>') + '</div>';
   }).join('');
-  const reasons = path.reasons.length ? '<ul>' + path.reasons.map(r => '<li>' + esc(r) + '</li>').join('') + '</ul>' : '<p>Your answers matched the standard order for this role, so nothing was moved.</p>';
+  const nCourses = path.items.filter(it => it.kind === 'course').length;
   return '<section class="col" aria-labelledby="h"><div class="hello">' + sprout('cheer', 84) + '<div><h1 id="h" class="m0">Your path, ' + esc(S.name) + '</h1></div></div>' +
-    '<p>' + esc(ROLES[c.role].label) + ': ' + (path.tested.length) + ' tested modules' + (c.role === 'engineer' ? ' and ' + ENGINEER_COURSES.length + ' existing courses' : '') + '.</p>' +
-    '<div class="card"><h3>What changed and why</h3>' + reasons + '</div>' +
-    '<div class="card"><h3>Recommended order</h3><ol class="order">' + items + '</ol></div>' +
+    personaCard(path, false) +
+    '<p>' + esc(ROLES[c.role].label) + ': ' + path.counted.length + ' modules count toward your readiness' + (nCourses ? ' and ' + nCourses + ' courses are matched to you' : '') + '.</p>' +
+    (path.notes.length ? '<div class="card soft" id="pathNotes">' + path.notes.map(n => '<p class="m0">' + esc(n) + '</p>').join('') + '</div>' : '') +
+    cards +
     '<button type="button" class="btn block" data-act="home" id="toHome">Start my path</button>' +
     '<div class="center"><button type="button" class="linkbtn" data-act="edit-intake">Change my answers</button></div></section>';
 }
 
 function stateWord(st, p) {
-  return ({ passed: 'Passed ' + (p && p.score ? p.score + '%' : ''), available: 'Ready', locked: 'Locked', hrlocked: 'Locked by HR', review: 'HR review requested', existing: 'Course completed' })[st] || '';
+  return ({ passed: 'Passed ' + (p && p.score ? p.score + '%' : ''), available: 'Ready', locked: 'Locked', hrlocked: 'Locked by HR', review: 'HR review requested',
+    course: 'Course to take', coursedone: 'Course completed', skip: 'Skip, already experienced' })[st] || '';
 }
 function homeView() {
   const c = liveCand(); const m = metrics(c); const path = m.path;
@@ -1398,7 +1741,7 @@ function homeView() {
   const xs = [50, 62, 68, 62, 50, 38, 32, 38];
   const units = path.units.filter(u => u.items.length).map(u => {
     const n = u.items.length;
-    const done = u.items.filter(it => { const s = nodeState(it, c, path); return s === 'passed' || s === 'existing'; }).length;
+    const done = u.items.filter(it => { const s = nodeState(it, c, path); return s === 'passed' || s === 'coursedone' || s === 'skip'; }).length;
     let d = '';
     for (let i = 0; i < n; i++) {
       const x = xs[i % 8], y = i * ROW + 44;
@@ -1410,24 +1753,25 @@ function homeView() {
       const cls = isRec ? 'rec' : st;
       let inner; let label;
       if (st === 'passed') inner = ico('check', 34) + '<span class="sc">' + esc(p.score) + '%</span>';
-      else if (st === 'existing') inner = ico('check', 34);
+      else if (st === 'coursedone' || st === 'skip') inner = ico('check', 34);
       else if (st === 'locked' || st === 'hrlocked') inner = ico('lock', 30);
       else if (st === 'review') inner = '!';
       else inner = esc(it.id);
       if (isRec) inner += '<span class="start">Start</span>';
-      const title = it.kind === 'existing' ? it.title : MOD[it.id].title;
+      const title = it.kind === 'course' ? ENGINEER_COURSES[Number(it.id.slice(1)) - 1] : MOD[it.id].title;
       const sub = isRec ? ((p.attempts || 0) === 1 ? 'Try again' : 'Next up') : stateWord(st, p);
-      label = (it.kind === 'existing' ? 'Course: ' : it.id + ': ') + title + '. ' + sub;
-      const act = it.kind === 'existing' ? 'open-course' : 'open-mod';
+      label = (it.kind === 'course' ? 'Course: ' : it.id + ': ') + title + '. ' + sub + (it.group === 'optional' ? '. Optional' : '');
+      const act = it.kind === 'course' ? 'open-course' : 'open-mod';
       return '<div class="pn" data-x="' + xs[i % 8] + '" data-top="' + (i * ROW) + '"><button type="button" class="node ' + cls + '" data-act="' + act + '" data-id="' + esc(it.id) + '" aria-label="' + esc(label) + '">' + inner + '</button>' +
-        '<div class="lw"><div class="lb">' + esc(title) + '</div><div class="nsub muted small">' + esc(sub) + '</div><div class="tags">' + tagsHTML(it.tags, 2) + '</div></div></div>';
+        '<div class="lw"><div class="lb">' + esc(title) + '</div><div class="nsub muted small">' + esc(sub) + '</div><div class="tags">' + tagsHTML(it.tags, 3) + '</div></div></div>';
     }).join('');
-    return '<div class="unit"><div><h3>' + esc(u.title) + '</h3><p>' + esc(u.sub) + '</p></div><span class="cnt">' + done + ' of ' + n + '</span></div>' +
+    return '<div class="unit" data-unit="' + u.key + '"><div><h3>' + esc(u.title) + '</h3><p>' + esc(u.sub) + '</p></div><span class="cnt">' + done + ' of ' + n + '</span></div>' +
       '<div class="path" data-h="' + (n * ROW) + '"><svg class="pathsvg" viewBox="0 0 100 ' + (n * ROW) + '" preserveAspectRatio="none" data-h="' + (n * ROW) + '" aria-hidden="true"><path d="' + d + '"/></svg>' + nodes + '</div>';
   }).join('');
   const recMod = rec ? MOD[rec] : null;
   return '<section class="col" aria-labelledby="h">' +
     '<div class="hello">' + sprout(m.readiness >= 100 ? 'cheer' : 'happy', 72) + '<div><h2 id="h">Hi ' + esc(S.name) + '</h2><span class="muted">' + esc(ROLES[c.role].label) + ', starting ' + esc(fmtDate(c.start)) + '</span></div></div>' +
+    personaCard(path, true) +
     '<div class="band" aria-label="Your stats"><div class="s">' + ico('flame', 30) + '<span class="v" id="vStreak">' + streak() + '</span><span class="l">Day streak</span></div>' +
     '<div class="s">' + ico('bolt', 30) + '<span class="v" id="vXp">' + S.xp + '</span><span class="l">XP</span></div>' +
     '<div class="s">' + ring(m.readiness, 56) + '<span class="l">Readiness</span></div></div>' +
@@ -1439,9 +1783,15 @@ function homeView() {
 }
 
 function courseView() {
-  const id = ui.cand.mod; const i = Number(String(id).slice(1)) - 1; const name = ENGINEER_COURSES[i] || 'Existing course';
+  const id = ui.cand.mod; const name = ENGINEER_COURSES[Number(String(id).slice(1)) - 1] || 'Existing course';
+  const c = liveCand(); const it = candPath(c).items.find(x => x.id === id);
+  const p = c.prog[id] || {};
+  const skip = it && it.group === 'testout';
   return '<section class="col"><button type="button" class="back" data-act="home">' + ico('back', 18) + ' Your path</button>' +
-    '<div class="card"><span class="tag go">Existing course</span><h1 class="mt8">' + esc(name) + '</h1><p>This course already exists in the Anthropic Academy catalogue and is marked completed for engineers. There is no practical test for it in this demo.</p>' +
+    '<div class="card"><span class="tag go">Existing course</span> ' + (it ? tagsHTML(it.tags, 3) : '') + '<h1 class="mt8">' + esc(name) + '</h1>' +
+    (it && it.reason ? '<p class="reason">' + esc(it.reason) + '</p>' : '') +
+    '<p>' + (skip ? 'You can skip this course because you are already experienced. You can still open it in the catalogue.' : 'This course already exists in the Anthropic Academy catalogue. There is no practical test for it in this demo.') + '</p>' +
+    (skip ? '' : '<button type="button" class="switch" data-act="course-done" aria-pressed="' + !!p.studied + '"><span class="knob"></span><span>Mark as completed</span></button> ') +
     '<a class="btn ghost" href="' + ACAD + '" target="_blank" rel="noopener">Open the Anthropic Academy catalogue</a></div></section>';
 }
 
@@ -1460,6 +1810,8 @@ function moduleView() {
   const mats = mod.material.map(x => '<li><span>' + esc(x.t) + '</span>' + (x.u ? '<a href="' + x.u + '" target="_blank" rel="noopener">Open</a>' : '') + '</li>').join('');
   return '<section class="col" aria-labelledby="h"><button type="button" class="back" data-act="home">' + ico('back', 18) + ' Your path</button>' +
     '<div class="mhead"><span class="id">' + esc(id) + '</span><h1 id="h">' + esc(mod.title) + '</h1><p class="muted">For ' + esc(mod.aud.toLowerCase()) + (mod.builds ? '. Builds on ' + esc(mod.builds) + '.' : '.') + '</p><div>' + tagsHTML(it ? it.tags : [], 4) + '</div></div>' +
+    (it && it.reason ? '<p class="reason" id="modReason">' + esc(it.reason) + '</p>' : '') +
+    (it && it.group === 'optional' ? '<div class="card soft" id="optNote"><strong>Optional.</strong> This module does not count toward your readiness or your credential.</div>' : '') +
     banner +
     '<div class="card"><h3>What you will be able to do</h3><ul class="outcomes">' + mod.outcomes.map(o => '<li>' + esc(o) + '</li>').join('') + '</ul></div>' +
     '<div class="card"><h3>Learn</h3><ul class="mat">' + mats + '</ul>' +
@@ -1528,33 +1880,37 @@ function startNameForm() {
   const inp = document.getElementById('firstName');
   const v = (inp ? inp.value : '').trim();
   if (!v) { ui.cand.nameErr = 'Enter your first name to start.'; render(); const i = document.getElementById('firstName'); if (i) i.focus(); return; }
-  ui.cand.nameErr = ''; S.name = v.slice(0, 30); save();
-  ui.cand.qi = 0; goCand('intake');
+  ui.cand.nameErr = ''; S.name = v.slice(0, 30); S.migrated = false; save();
+  ui.cand.qk = null; goCand('intake');
 }
 function pickAnswer(t) {
-  const q = QUESTIONS[ui.cand.qi]; let v = t.getAttribute('data-v');
+  const q = QBY[ui.cand.qk]; if (!q) return;
+  let v = t.getAttribute('data-v');
   if (q.type === 'scale') v = Number(v);
-  const a = S.intake.ans;
+  const a = Object.assign({}, S.intake.ans);
   if (q.type === 'multi') {
-    let cur = Array.isArray(a[q.id]) ? a[q.id].slice() : [];
-    if (v === 'none') cur = cur.indexOf('none') >= 0 ? [] : ['none'];
-    else { cur = cur.filter(x => x !== 'none'); const i = cur.indexOf(v); if (i >= 0) cur.splice(i, 1); else cur.push(v); }
-    a[q.id] = cur;
-  } else if (q.type === 'pick3') {
-    let cur = Array.isArray(a[q.id]) ? a[q.id].slice() : [];
-    const i = cur.indexOf(v); if (i >= 0) cur.splice(i, 1); else if (cur.length < 3) cur.push(v);
-    a[q.id] = cur;
-  } else a[q.id] = v;
+    let cur = Array.isArray(a[q.key]) ? a[q.key].slice() : [];
+    const i = cur.indexOf(v);
+    if (q.exclusive && v === q.exclusive) cur = i >= 0 ? [] : [v];
+    else {
+      if (q.exclusive) cur = cur.filter(x => x !== q.exclusive);
+      if (i >= 0) cur.splice(i, 1); else if (!q.max || cur.length < q.max) cur.push(v);
+    }
+    a[q.key] = cur;
+  } else a[q.key] = v;
+  S.intake.ans = cleanAnswers(a);                    // drops answers to questions that are no longer shown
+  if (S.intake.done && !intakeComplete(S.intake.ans)) S.intake.done = false;   // an edit opened new questions
   save(); render();
 }
 function nextQuestion() {
-  const q = QUESTIONS[ui.cand.qi];
-  if (!qValid(q, S.intake.ans)) return;
-  if (ui.cand.qi < QUESTIONS.length - 1) { ui.cand.qi++; goCand('intake'); return; }
-  S.intake.done = true; save(); goCand('summary');
+  const cq = currentQuestion();
+  if (!qValid(cq.q, S.intake.ans)) return;
+  if (cq.idx < cq.seq.length - 1) { ui.cand.qk = cq.seq[cq.idx + 1].key; goCand('intake'); return; }
+  S.intake.done = intakeComplete(S.intake.ans); save(); goCand('summary');
 }
 function backQuestion() {
-  if (ui.cand.qi > 0) { ui.cand.qi--; goCand('intake'); } else goCand('welcome');
+  const cq = currentQuestion();
+  if (cq.idx > 0) { ui.cand.qk = cq.seq[cq.idx - 1].key; goCand('intake'); } else goCand('welcome');
 }
 function openModule(id) { prog(id); goCand('module', { mod: id }); }
 function startTest() {
@@ -1594,10 +1950,12 @@ async function submitAnswer() {
    ===================================================================== */
 function credModules(c) {
   const path = candPath(c); const out = [];
-  path.units.forEach(u => u.items.forEach(it => {
-    if (it.kind === 'existing') out.push({ id: it.id, title: it.title, existing: true });
-    else { const p = c.prog[it.id]; if (p && p.passed) out.push({ id: it.id, title: MOD[it.id].title, score: p.score, date: p.date }); }
-  }));
+  path.items.forEach(it => {
+    if (it.group === 'optional') return;                      // optional modules never count toward the credential
+    const p = c.prog[it.id];
+    if (it.kind === 'course') { if (p && p.studied) out.push({ id: it.id, title: ENGINEER_COURSES[Number(it.id.slice(1)) - 1], existing: true }); }
+    else if (p && p.passed) out.push({ id: it.id, title: MOD[it.id].title, score: p.score, date: p.date });
+  });
   return out;
 }
 function qrSVG() {
@@ -1673,7 +2031,7 @@ function hrDashboard() {
   const rows = cands.map((c, i) => {
     const m = ms[i];
     const role = c.role ? ROLES[c.role].label : 'Intake pending';
-    return '<tr class="trow" data-act="hr-open" data-key="' + c.key + '"><td><button type="button" class="rbtn" data-act="hr-open" data-key="' + c.key + '">' + esc(c.name) + '</button>' + (c.live ? ' <span class="chip">Live</span>' : '') + '</td><td>' + esc(role) + '</td><td>' + esc(fmtDate(c.start)) + '</td>' +
+    return '<tr class="trow" data-act="hr-open" data-key="' + c.key + '"><td><button type="button" class="rbtn" data-act="hr-open" data-key="' + c.key + '">' + esc(c.name) + '</button>' + (c.live ? ' <span class="chip">Live</span>' : '') + (m.path.flags.length ? ' <span class="chip flag" title="' + esc(m.path.flags.join('; ')) + '">Flag</span>' : '') + '</td><td>' + esc(role) + '</td><td>' + esc(fmtDate(c.start)) + '</td>' +
       '<td><div class="bar" role="img" aria-label="Readiness ' + m.readiness + ' percent"><i class="' + (m.readiness < 40 ? 'low' : '') + '" data-w="' + m.readiness + '"></i></div><span class="small muted">' + m.readiness + '%</span></td>' +
       '<td>' + m.passed.length + ' of ' + m.tested.length + '</td><td><span class="st ' + statusClass(m.status) + '">' + esc(m.status) + '</span></td></tr>';
   }).join('');
@@ -1682,21 +2040,24 @@ function hrDashboard() {
     '<div class="card"><h2>Candidates</h2><p class="muted small">Eight fictional sample candidates and the live demo candidate. Select a name for detail.</p><div class="scroll"><table id="candTable"><thead><tr><th>Name</th><th>Role</th><th>Start date</th><th>Readiness</th><th>Passed</th><th>Status</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>';
 }
 function answerLabel(q, v) {
-  const opt = x => { const o = q.opts.find(y => String(y.v) === String(x)); return o ? o.l : String(x); };
+  const opt = x => optLabel(q.key, x);
   if (Array.isArray(v)) return v.map(opt).join(', ') || 'No answer';
   if (v === undefined || v === null || v === '') return 'Not answered';
   return opt(v);
 }
+const GROUP_LABEL = { priority: 'Priority', required: 'Required', testout: 'Test out', optional: 'Optional' };
+const GROUP_CLASS = { priority: 'prio', required: '', testout: 'go', optional: '' };
+function groupTag(g, course) { return '<span class="tag ' + GROUP_CLASS[g] + '" data-group="' + g + '">' + (course && g === 'testout' ? 'Skip, already experienced' : GROUP_LABEL[g]) + '</span>'; }
 function hrDetail() {
   const c = candByKey(ui.hr.cand); if (!c) return hrDashboard();
   const m = metrics(c);
-  const base = basePathIds(c);
-  const assigned = new Set(m.path.ids);
+  const itemOf = {}; m.path.items.forEach(it => { itemOf[it.id] = it; });
   let rows = '';
+  const groupBtn = (id, g) => '<button type="button" class="btn sm ghost" data-act="hr-group" data-key="' + c.key + '" data-id="' + id + '" aria-label="' + (g === 'optional' ? 'Make ' + id + ' required' : 'Make ' + id + ' optional') + '">' + (g === 'optional' ? 'Make required' : 'Make optional') + '</button>';
   if (!c.role) rows = '<tr><td colspan="5">This candidate has not completed the intake, so no path is assigned yet.</td></tr>';
   else {
     rows = MODULES.map(mod => {
-      const id = mod.id; const p = c.prog[id] || {}; const on = assigned.has(id); const locked = c.ov.lock.includes(id);
+      const id = mod.id; const p = c.prog[id] || {}; const it = itemOf[id]; const on = !!it; const locked = c.ov.lock.includes(id);
       let status, cls = 'dim';
       if (!on) status = 'Not assigned';
       else if (p.passed) { status = 'Passed'; cls = 'ready'; }
@@ -1704,28 +2065,37 @@ function hrDetail() {
       else if ((p.attempts || 0) >= 2) { status = 'HR review'; cls = 'review'; }
       else if ((p.attempts || 0) === 1) { status = 'In progress'; cls = 'atrisk'; }
       else { status = 'Not started'; cls = 'ontrack'; }
-      const req = id === 'M1' || id === 'M15';
+      const fixed = id === 'M1' || id === 'M15';
       let acts = '';
-      acts += req ? '<span class="muted small">Required</span>' : '<button type="button" class="btn sm ' + (on ? 'ghost' : '') + '" data-act="hr-assign" data-key="' + c.key + '" data-id="' + id + '" aria-label="' + (on ? 'Unassign ' : 'Assign ') + id + '">' + (on ? 'Unassign' : 'Assign') + '</button>';
+      acts += fixed ? '<span class="muted small">Required</span>' : '<button type="button" class="btn sm ' + (on ? 'ghost' : '') + '" data-act="hr-assign" data-key="' + c.key + '" data-id="' + id + '" aria-label="' + (on ? 'Unassign ' : 'Assign ') + id + '">' + (on ? 'Unassign' : 'Assign') + '</button>';
+      if (on && !fixed) acts += groupBtn(id, it.group);
       acts += '<button type="button" class="btn sm ghost" data-act="hr-lock" data-key="' + c.key + '" data-id="' + id + '"' + (on ? '' : ' disabled') + ' aria-label="' + (locked ? 'Unlock ' : 'Lock ') + id + '">' + (locked ? 'Unlock' : 'Lock') + '</button>';
       if (c.live && on && (p.attempts || 0) >= 2 && !p.passed) acts += '<button type="button" class="btn sm dark" data-act="hr-retry" data-id="' + id + '">Allow retry</button>';
-      return '<tr data-row="' + id + '"><td><strong>' + id + '</strong> ' + esc(mod.title) + '</td><td><span class="st ' + cls + '">' + status + '</span></td><td>' + (on && p.passed ? p.score + '%' : '-') + '</td><td>' + (on ? (p.attempts || 0) : '-') + '</td><td><div class="acts">' + acts + '</div></td></tr>';
+      return '<tr data-row="' + id + '"><td><strong>' + id + '</strong> ' + esc(mod.title) + (on ? ' ' + groupTag(it.group) : '') + (on && it.reason ? '<div class="reason">' + esc(it.reason) + '</div>' : '') + '</td><td><span class="st ' + cls + '">' + status + '</span></td><td>' + (on && p.passed ? p.score + '%' : '-') + '</td><td>' + (on ? (p.attempts || 0) : '-') + '</td><td><div class="acts">' + acts + '</div></td></tr>';
     }).join('');
-    if (c.role === 'engineer') rows += '<tr><td><strong>Courses</strong> ' + ENGINEER_COURSES.length + ' existing engineer courses</td><td><span class="st ready">Completed</span></td><td>-</td><td>-</td><td><span class="muted small">No test</span></td></tr>';
+    if (c.role === 'engineer') rows += ENGINEER_COURSES.map((name, i) => {
+      const id = 'C' + (i + 1); const it = itemOf[id]; const p = c.prog[id] || {};
+      if (!it) return '<tr data-row="' + id + '"><td><strong>' + id + '</strong> ' + esc(name) + '</td><td><span class="st dim">Not listed</span></td><td>-</td><td>-</td><td><span class="muted small">Not listed for this candidate</span></td></tr>';
+      const st = it.group === 'testout' ? ['Skip, already experienced', 'ready'] : p.studied ? ['Completed', 'ready'] : it.group === 'optional' ? ['Optional', 'dim'] : ['Course to take', 'ontrack'];
+      return '<tr data-row="' + id + '"><td><strong>' + id + '</strong> ' + esc(name) + ' ' + groupTag(it.group, true) + (it.reason ? '<div class="reason">' + esc(it.reason) + '</div>' : '') + '</td><td><span class="st ' + st[1] + '">' + st[0] + '</span></td><td>-</td><td>-</td><td><div class="acts">' + groupBtn(id, it.group) + '</div></td></tr>';
+    }).join('');
   }
-  const qa = QUESTIONS.map(q => '<dt>' + esc(q.q) + '</dt><dd>' + esc(answerLabel(q, c.ans ? c.ans[q.id] : undefined)) + '</dd>').join('');
+  const asked = visibleQuestions(c.ans || {});
+  const qa = asked.map(q => '<dt>' + esc(q.prompt) + '</dt><dd>' + esc(answerLabel(q, c.ans ? c.ans[q.key] : undefined)) + '</dd>').join('');
+  const flags = m.path.flags.map(f => '<div class="flagbox" data-flag="1"><strong>Flag:</strong> ' + esc(f) + '</div>').join('');
   return '<button type="button" class="back" data-act="hr-tab" data-tab="dashboard">' + ico('back', 18) + ' All candidates</button>' +
     '<div class="row between"><div><h2 class="m0" id="detailName">' + esc(c.name) + (c.live ? ' (live candidate)' : '') + '</h2><p class="muted">' + esc(c.role ? ROLES[c.role].label : 'Intake pending') + ', starting ' + esc(fmtDate(c.start)) + '</p></div><span class="st ' + statusClass(m.status) + '" id="detailStatus">' + esc(m.status) + '</span></div>' +
     (c.live ? '<p class="muted small">Changes here show up in the Candidate path straight away.</p>' : '') +
-    '<div class="card"><h3>Modules</h3><div class="scroll"><table id="modTable"><thead><tr><th>Module</th><th>Status</th><th>Score</th><th>Attempts</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
-    '<div class="card"><h3>Questionnaire answers</h3>' + (c.ans && Object.keys(c.ans).length ? '<dl class="qa">' + qa + '</dl>' : '<p class="muted">No answers yet.</p>') + '</div>';
+    (c.role ? personaCard(m.path, false, flags + m.path.notes.map(n => '<p class="muted small m0">' + esc(n) + '</p>').join('')) : '') +
+    '<div class="card"><h3>Modules</h3><p class="muted small">Required, priority and test-out modules count toward readiness and the credential. Optional ones never do.</p><div class="scroll"><table id="modTable"><thead><tr><th>Module</th><th>Status</th><th>Score</th><th>Attempts</th><th>Actions</th></tr></thead><tbody>' + rows + '</tbody></table></div></div>' +
+    '<div class="card"><h3>Questionnaire answers</h3>' + (c.ans && Object.keys(c.ans).length ? '<p class="muted small">Only the questions this candidate was asked.</p><dl class="qa">' + qa + '</dl>' : '<p class="muted">No answers yet.</p>') + '</div>';
 }
 function hrRoles() {
   const role = ui.hr.role;
   const pick = '<div class="rolepick" role="group" aria-label="Role">' + Object.keys(ROLES).map(k => '<button type="button" class="btn sm ' + (k === role ? 'dark' : 'ghost') + '" data-act="hr-role" data-role="' + k + '" aria-pressed="' + (k === role) + '">' + esc(ROLES[k].label) + '</button>').join('') + '</div>';
   let body;
   if (role === 'engineer') {
-    body = '<div class="card"><h3>Software engineer</h3><p>The engineer path uses M1, M7 and M8, then these existing courses (completed, no test), then the M15 capstone. There is no 12-skill map for engineers in this pilot.</p><ul>' + ENGINEER_COURSES.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>';
+    body = '<div class="card"><h3>Software engineer</h3><p>The engineer path uses M1, M7 and M8, then the courses below that match the candidate&#39;s answers (no test), then the M15 capstone. There is no 12-skill map for engineers in this pilot.</p><ul>' + ENGINEER_COURSES.map(x => '<li>' + esc(x) + '</li>').join('') + '</ul></div>';
   } else {
     const edits = S.roleMaps[role] || {};
     body = '<div class="card"><div class="row between"><h3 class="m0">' + esc(ROLES[role].label) + ': 12 skills</h3><button type="button" class="btn sm ghost" data-act="hr-restore">Restore defaults</button></div><p class="muted small">Edit any skill. Changes save in this browser.</p>' +
@@ -1737,7 +2107,7 @@ function hrModules() {
   const cards = MODULES.map(m => '<div class="card"><div class="row between"><h3 class="m0">' + m.id + ' ' + esc(m.title) + '</h3><span class="chip">' + esc(m.aud) + '</span></div>' +
     '<p class="small"><strong>Existing material.</strong> ' + (m.builds ? 'Builds on ' + esc(m.builds) + '.' : m.material.map(x => esc(x.t)).join('; ') + '.') + '</p>' +
     '<p class="small m0"><strong>Test.</strong> ' + esc(m.test) + '</p></div>').join('');
-  return '<div class="modgrid">' + cards + '<div class="card"><h3>Engineer course track</h3><p class="small">Existing courses, no test in the demo. Engineers complete M1, M7 and M8, this track, then M15.</p><ol class="small">' + ENGINEER_COURSES.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol></div></div>';
+  return '<div class="modgrid">' + cards + '<div class="card"><h3>Engineer course track</h3><p class="small">Existing courses, no test in the demo. Each engineer sees only the courses that match their intake answers (required, priority, skip or optional), plus M1, M7, M8 and M15.</p><ol class="small">' + ENGINEER_COURSES.map(x => '<li>' + esc(x) + '</li>').join('') + '</ol></div></div>';
 }
 
 /* ---------- HR / credential actions ---------- */
@@ -1757,6 +2127,24 @@ function toggleLock(key, id) {
   if (i >= 0) ov.lock.splice(i, 1); else ov.lock.push(id);
   save(); render();
   toast((i >= 0 ? 'Unlocked ' : 'Locked ') + id + (c.live ? '. The candidate path is updated.' : ''));
+}
+/* HR: "Make required" on an optional module, "Make optional" on any other. Stored as an override that is dropped when it matches the rules' own result. */
+function toggleGroup(key, id) {
+  const c = candByKey(key); if (!c || !c.role || id === 'M1' || id === 'M15') return;
+  const it = candPath(c).items.find(x => x.id === id); if (!it) return;
+  const target = it.group === 'optional' ? 'required' : 'optional';
+  const baseG = baseGroup(c, id);
+  if (baseG && (target === 'optional') === (baseG === 'optional')) delete c.ov.group[id]; else c.ov.group[id] = target;
+  save(); render();
+  toast(id + ' is now ' + target + '.' + (c.live ? ' The candidate path is updated.' : ''));
+}
+function retakeIntake() {
+  S.intake = { done: false, ans: {} }; S.prog = {}; S.xp = 0; S.days = []; S.cred = null; S.migrated = false;
+  delete S.hr.live; save();
+  ui.cand = { screen: 'welcome', qk: null, mod: null, draft: {}, result: null, nameErr: '' }; ui.busy = false;
+  closeDialog();
+  if (route() !== 'candidate') location.hash = '#candidate'; else render({ top: true });
+  toast('Intake cleared. Answer the questions again to build a new path.');
 }
 function passAll() {
   ui.menu = false;
@@ -1778,7 +2166,7 @@ function passAll() {
 }
 function resetDemo() {
   storeClear(); S = defaultState();
-  ui.cand = { screen: 'welcome', qi: 0, mod: null, draft: {}, result: null, nameErr: '' };
+  ui.cand = { screen: 'welcome', qk: null, mod: null, draft: {}, result: null, nameErr: '' };
   ui.hr = { tab: 'dashboard', cand: null, role: 'finance' }; ui.verify = null; ui.menu = false;
   SAMPLES.forEach(s => { SAMPLE_PROG[s.key] = sampleProg(s); });
   closeDialog();
@@ -1819,6 +2207,10 @@ const ACTIONS = {
   'hr-lock': t => toggleLock(t.getAttribute('data-key'), t.getAttribute('data-id')),
   'hr-retry': t => { const p = prog(t.getAttribute('data-id')); p.attempts = 1; p.hrReview = false; save(); render(); toast('One more attempt allowed.'); },
   'hr-role': t => { ui.hr.role = t.getAttribute('data-role'); render(); },
+  'course-done': () => { const p = prog(ui.cand.mod); p.studied = !p.studied; save(); render(); toast(p.studied ? 'Course marked as completed.' : 'Completed mark removed.'); },
+  'hr-group': t => toggleGroup(t.getAttribute('data-key'), t.getAttribute('data-id')),
+  'retake-ask': () => { ui.menu = false; renderNav(); openDialog('Retake the intake?', 'This clears your answers, your path and your test results so you can start the questions again. Your name is kept.', [{ label: 'Cancel', act: 'dlg-close', kind: 'ghost' }, { label: 'Retake intake', act: 'retake-do', kind: 'coral' }]); },
+  'retake-do': () => retakeIntake(),
   'hr-restore': () => { delete S.roleMaps[ui.hr.role]; save(); render(); toast('Role map restored to defaults.'); }
 };
 function updateWc() {

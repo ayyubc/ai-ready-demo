@@ -1,4 +1,4 @@
-const CACHE = "ai-ready-d9dbeea7";
+const CACHE = "ai-ready-03243e3d";
 const PRECACHE = [
  "./",
  "./fonts/albert-sans-latin-400-normal.woff2",
